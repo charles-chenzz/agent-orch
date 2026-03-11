@@ -23,67 +23,123 @@
 
 | Feature | 描述 | 优先级 | 状态 |
 |---------|------|--------|------|
-| F0.6 | 三栏布局容器 (Sidebar / Main / RightPanel) | P0 | ⏸️ 待实现 |
-| F0.7 | 响应式布局适配 | P1 | ⏸️ 待实现 |
+| F0.6 | 上下分区布局 (可折叠上方 + Terminal) | P0 | ⏸️ 待实现 |
+| F0.7 | 上方面板 (Projects + Diff) | P0 | ⏸️ 待实现 |
 | F0.8 | 暗色主题基础样式 | P0 | ⏸️ 待实现 |
+| F0.9 | Diff 侧边滑出面板 | P1 | ⏸️ 待实现 |
 
-#### UI 布局设计
+#### UI 布局设计（已确认 2026-03-11）
 
-参考 [Arbor](https://penso.github.io/arbor/) 的三栏布局，左侧栏支持多项目层级：
+**整体结构**：上下分区，上方可折叠
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Agent Orchestrator                                   [窗口控制] [API状态] │
-├──────────────────┬─────────────────────────────────────┬────────────────────┤
-│                  │                                     │                    │
-│  ▼ agent-orch     │                                     │  Changes          │
-│    ▸ main         │    Terminal                          │  ┌──────────────┐  │
-│    feature-auth   │    ┌─────────────────────────────┐   │  │ Staged       │  │
-│                  │    │ Tab 1 [+] [Tab 2]          │   │  │  ▸ file.ts   │  │
-│  ▶ another-proj   │    ├─────────────────────────────┤   │  │  ▸ file.go   │  │
-│    ▸ main         │    │                             │   │  └──────────────┘  │
-│                  │    │  $ _                        │   │                    │
-│                  │    │                             │   │  Unstaged         │
-│                  │    │                             │   │  ┌──────────────┐  │
-│                  │    │                             │   │  │ ▸ mod.ts     │  │
-│                  │    │                             │   │  │ ▸ test.ts    │  │
-│                  │    └─────────────────────────────┘   │  └──────────────┘  │
-│                  │                                     │                    │
-│  [+ New Project] │                                     │  [Diff/PR/API Tab] │
-│                  │                                     │                    │
-├──────────────────┴─────────────────────────────────────┴────────────────────┤
-       ↑                    ↑                              ↑
-    左侧栏              中间栏                          右侧栏
-  (Projects +        (Terminal)                    (File Changes
-   Worktrees)                                       / Diff)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Agent Orchestrator                         [API: ● claude-opus] [⚙️] [▼]  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─ Projects ─────────────┐  ┌─ Diff ───────────────────────────────────┐   │
+│  │                        │  │                                          │   │
+│  │  ▼ agent-orch          │  │  ▸ src/app.tsx      +45 -12  [点击展开]  │   │
+│  │    ● main              │  │  ▸ lib/auth.ts      +120 -3              │   │
+│  │    ○ feature-auth      │  │  ▸ types/user.ts    +28                  │   │
+│  │    ○ fix-bug           │  │                                          │   │
+│  │    [+ New Worktree]    │  │  点击文件 → 弹出独立 Diff 页面            │   │
+│  │                        │  │                                          │   │
+│  │  ▶ another-project     │  │  [Accept All] [Reject All]               │   │
+│  │    (点击切换)          │  │                                          │   │
+│  │                        │  │                                          │   │
+│  │  ────────────────────  │  └──────────────────────────────────────────┘   │
+│  │  [可折叠] [▲]          │                                                  │
+│  └────────────────────────┘                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─ Terminal ───────────────────────────────────────────────────────────┐   │
+│  │  [Tab: main ●] [Tab: feature-auth ○] [Tab: fix-bug ○] [+]            │   │
+│  ├──────────────────────────────────────────────────────────────────────┤   │
+│  │                                                                      │   │
+│  │  $ claude                                                            │   │
+│  │  > Working on authentication...                                      │   │
+│  │  > [▓▓▓▓▓▓░░░░] 60%                                                 │   │
+│  │  >                                                                   │   │
+│  │                                                                      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  底部状态栏: main @ agent-orch | ● 3 changes | API: $2.34 today            │
+└─────────────────────────────────────────────────────────────────────────────┘
+        上方面板 (可折叠, ~180px)                      下方 Terminal (flex-1)
 ```
+
+#### 核心设计决策
+
+| 决策 | 说明 |
+|------|------|
+| **上下分区** | 上方 Projects+Diff，下方 Terminal |
+| **上方可折叠** | 点击 [▲] 折叠为 40px，Terminal 全屏 |
+| **Terminal Tab 归属 Worktree** | 每个 worktree 有独立的 terminal 上下文 |
+| **Diff 侧边滑出** | 点击文件后从右侧滑出面板，不完全遮挡 Terminal |
 
 #### 核心交互逻辑
 
 | 操作 | 效果 |
 |------|------|
-| 点击项目 (▶/▼) | 展开/折叠该项目的 worktree 列表 |
-| 点击 worktree | 中间栏显示该 worktree 的终端，右侧栏显示文件变更 |
-| 切换 worktree | 终端会话保持（后续 Phase 实现），右侧栏更新 |
-| 点击右侧栏文件 | 显示 diff 内容 |
-| 点击右侧栏 Tab | 切换 Diff / API Manager 视图 |
+| 点击 worktree | 切换当前 worktree，Diff 更新，Terminal Tab 切换 |
+| 点击 project | 切换 project，展开其 worktree 列表 |
+| 点击 Diff 文件 | **侧边滑出** Diff 详情面板 |
+| 点击 [▲] | 折叠上方面板，Terminal 全屏 |
+| 点击 Terminal Tab | 切换 terminal session |
+
+#### Diff 侧边滑出面板
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Projects │ Diff (折叠) │ Terminal                                     │
+│                        │                                                │
+│                        │          $ claude                              │
+│                        │          > Working...                          │
+│                        │                                                │
+│                        ├────────────────────────────────────────────────┤
+│                        │  ← Diff: src/app.tsx                          ││
+│                        │  ┌──────────────────┬──────────────────────┐  ││
+│                        │  │ Original         │ Modified            │  ││
+│                        │  │ 1 function App() │ 1 function App(...)  │  ││
+│                        │  └──────────────────┴──────────────────────┘  ││
+│                        │  [Accept] [Reject]                    [×]    ││
+│                        └────────────────────────────────────────────────┤
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↑ Diff 从右侧滑出，覆盖部分 Terminal
+```
+
+#### Terminal Tab 归属 Worktree
+
+```
+当前 worktree: main
+  → Tab 1: claude (running)
+  → Tab 2: codex (idle)
+  → Tab 3: shell
+
+切换到 worktree: feature-auth
+  → Tab 1: claude (running)
+  → Tab 2: shell
+```
+
+**优点**：每个 worktree 有独立的 terminal 上下文，切换时状态保持。
 
 #### 组件结构
 
 ```
 frontend/src/
-├── App.tsx                    # 主容器 (三栏布局)
+├── App.tsx                    # 主容器 (上下分区布局)
 ├── components/
 │   └── Layout/
-│       ├── Sidebar.tsx        # 左侧栏 - 项目+worktree 层级列表
-│       ├── ProjectItem.tsx    # 单个项目 (可折叠)
-│       ├── WorktreeItem.tsx   # 单个 worktree
-│       ├── MainPane.tsx       # 中间栏 - 终端区域
-│       └── RightPanel.tsx     # 右侧栏 - 文件变更/Diff
+│       ├── TopPanel.tsx       # 上方面板 (可折叠)
+│       ├── ProjectList.tsx    # 左侧 - 项目+worktree 层级列表
+│       ├── DiffList.tsx       # 右侧 - 文件变更列表
+│       ├── TerminalPane.tsx   # 下方 - 终端区域
+│       ├── TerminalTabs.tsx   # Terminal Tab 管理
+│       ├── DiffPanel.tsx      # 侧边滑出 Diff 详情
+│       └── StatusBar.tsx      # 底部状态栏
 ├── stores/
-│   └── appStore.ts           # projects, selectedWorktree 状态
+│   └── appStore.ts           # projects, selectedWorktree, terminalTabs 状态
 └── types/
-    └── index.ts              # Project, Worktree 类型定义
+    └── index.ts              # Project, Worktree, TerminalTab 类型定义
 ```
 
 #### 状态管理
@@ -93,6 +149,9 @@ interface AppState {
   projects: Project[]           // 所有项目
   selectedWorktreeId: string    // 当前选中的 worktree
   expandedProjectIds: string[]  // 展开的项目
+  topPanelCollapsed: boolean    // 上方面板是否折叠
+  diffPanelOpen: boolean        // Diff 侧边面板是否打开
+  selectedDiffFile: string      // 选中的 diff 文件
 }
 
 interface Project {
@@ -108,25 +167,55 @@ interface Worktree {
   branch: string
   path: string
   hasChanges: boolean
+  terminalTabs: TerminalTab[]  // 该 worktree 的 terminal tabs
+}
+
+interface TerminalTab {
+  id: string
+  name: string
+  status: 'running' | 'idle'
+  agentType?: 'claude' | 'codex' | 'cursor' | 'shell'
 }
 ```
 
-#### 配色方案
+#### 键盘快捷键
 
-| 元素 | 颜色 | 用途 |
-|------|------|------|
-| 背景 | `#0d1117` | 主背景色 |
-| 边框 | `#30363d` | 分隔线 |
-| 强调 | `#58a6ff` | 选中状态、链接 |
-| 文字 | `#c9d1d9` | 主文字 |
-| 次要文字 | `#8b949e` | 描述文字 |
-| 成功 | `#3fb950` | 新增文件 |
-| 警告 | `#d29922` | 修改文件 |
-| 错误 | `#f85149` | 删除文件 |
+| 快捷键 | 功能 |
+|--------|------|
+| `Cmd/Ctrl + T` | 新建 Terminal Tab |
+| `Cmd/Ctrl + W` | 关闭当前 Tab |
+| `Cmd/Ctrl + 1-9` | 切换 Tab |
+| `Cmd/Ctrl + P` | 切换 Project |
+| `Cmd/Ctrl + D` | 切换 Diff 面板 |
+| `Cmd/Ctrl + B` | 折叠/展开上方面板 |
+
+#### 配色方案（GitHub Dark Dimmed）
+
+```css
+:root {
+  --bg-base: #22272e;        /* 主背景 */
+  --bg-surface: #2d333b;     /* 面板背景 */
+  --border: #373e47;         /* 边框 */
+  --text: #adbac7;           /* 主文字 */
+  --text-muted: #768390;     /* 次要文字 */
+  --accent: #6cb6ff;         /* 强调色（蓝） */
+  --success: #57ab5a;        /* 新增（绿） */
+  --warning: #c69026;        /* 修改（黄） */
+  --error: #f47067;          /* 删除（红） */
+}
+```
+
+#### 动画与过渡
+
+| 交互 | 动画 |
+|------|------|
+| 折叠上方面板 | `height: 180px → 40px` (200ms ease) |
+| Diff 侧边滑出 | `transform: translateX(100% → 0)` (150ms) |
+| 切换 worktree | 内容淡入淡出 (100ms) |
 
 ---
 
-#### 备选方案 (待思考)
+#### 历史方案 (已否决)
 
 以下是一个被否决的 UI 设计方案，记录供参考：
 
