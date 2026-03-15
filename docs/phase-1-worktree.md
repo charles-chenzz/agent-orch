@@ -4,6 +4,7 @@
 > **目标**：实现完整的 Git Worktree CRUD 功能
 > **依赖**：Phase 0 (Foundation)
 > **交付**：v0.2.0-alpha
+> **状态**：🔄 **进行中** (2026-03-15)
 
 ---
 
@@ -11,41 +12,124 @@
 
 ### 1.1 Go 后端 - Worktree 核心
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F1.1 | worktree.Manager 结构定义 | P0 |
-| F1.2 | List() - 列出所有 worktrees | P0 |
-| F1.3 | Create(name, branch string) - 创建 worktree | P0 |
-| F1.4 | Delete(name string) - 删除 worktree | P0 |
-| F1.5 | GetStatus(name string) - 获取 worktree 状态 | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F1.1 | worktree.Manager 结构定义 | P0 | ✅ 完成 |
+| F1.2 | List() - 列出所有 worktrees | P0 | ✅ 完成 |
+| F1.3 | Create(name, branch string) - 创建 worktree | P0 | ⏸️ 待实现 |
+| F1.4 | Delete(name string) - 删除 worktree | P0 | ⏸️ 待实现 |
+| F1.5 | GetStatus(name string) - 获取 worktree 状态 | P0 | ✅ 完成 |
 
 ### 1.2 Go 后端 - Git 操作
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F1.6 | 分支安全检查 (未提交变更检测) | P0 |
-| F1.7 | 未推送提交检测 | P1 |
-| F1.8 | 最后 Git 活动时间戳 | P1 |
-| F1.9 | 当前分支信息 | P0 |
-| F1.10 | 远程分支列表 | P1 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F1.6 | 分支安全检查 (未提交变更检测) | P0 | ✅ 完成 |
+| F1.7 | 未推送提交检测 | P1 | ✅ 完成 |
+| F1.8 | 最后 Git 活动时间戳 | P1 | ✅ 完成 |
+| F1.9 | 当前分支信息 | P0 | ✅ 完成 |
+| F1.10 | 远程分支列表 | P1 | ✅ 完成 |
 
 ### 1.3 前端 - Worktree 组件
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F1.11 | WorktreeList.tsx - 列表组件 | P0 |
-| F1.12 | WorktreeItem.tsx - 单项组件 | P0 |
-| F1.13 | CreateModal.tsx - 创建弹窗 | P0 |
-| F1.14 | DeleteConfirm.tsx - 删除确认 | P0 |
-| F1.15 | BranchStatusIndicator - 分支状态指示器 | P1 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F1.11 | WorktreeList.tsx - 列表组件 | P0 | ⏸️ 待实现 |
+| F1.12 | WorktreeItem.tsx - 单项组件 | P0 | ⏸️ 待实现 |
+| F1.13 | CreateModal.tsx - 创建弹窗 | P0 | ⏸️ 待实现 |
+| F1.14 | DeleteConfirm.tsx - 删除确认 | P0 | ⏸️ 待实现 |
+| F1.15 | BranchStatusIndicator - 分支状态指示器 | P1 | ⏸️ 待实现 |
 
 ### 1.4 前端 - 状态管理
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F1.16 | useWorktree hook | P0 |
-| F1.17 | worktreeStore (Zustand) | P0 |
-| F1.18 | Wails IPC 绑定类型 | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F1.16 | useWorktree hook | P0 | ⏸️ 待实现 |
+| F1.17 | worktreeStore (Zustand) | P0 | ⏸️ 待实现 |
+| F1.18 | Wails IPC 绑定类型 | P0 | ✅ 完成 |
+
+---
+
+## 1.5 已实现功能 (2026-03-15)
+
+### Go 后端实现
+
+**文件结构**：
+```
+internal/worktree/
+├── types.go        # 数据结构定义
+├── manager.go      # Manager 实现
+└── manager_test.go # 单元测试 (12 个测试用例)
+```
+
+**核心功能**：
+
+| 方法 | 功能 | 说明 |
+|------|------|------|
+| `NewManager(repoPath)` | 创建 Manager | 路径验证 + git.PlainOpen |
+| `List()` | 列出所有 worktrees | main + .git/worktrees 目录 |
+| `GetStatus(path)` | 获取详细状态 | staged/unstaged/untracked |
+| `GetStatusByName(name)` | 按名称获取状态 | 便捷方法 |
+| `ListBranches()` | 列出所有分支 | 额外功能 |
+| `calculateAheadBehind()` | 计算 ahead/behind | 使用 git rev-list |
+| `getLastCommit()` | 获取最后提交 | CommitInfo |
+| `getLastActivity()` | 获取最后活动时间 | 读取 .git/logs/HEAD |
+
+**数据结构**：
+
+```go
+// Worktree - worktree 基本信息
+type Worktree struct {
+    ID           string    `json:"id"`
+    Name         string    `json:"name"`
+    Path         string    `json:"path"`
+    Branch       string    `json:"branch"`
+    Head         string    `json:"head"`         // commit hash 前7位
+    IsMain       bool      `json:"isMain"`
+    HasChanges   bool      `json:"hasChanges"`
+    Unpushed     int       `json:"unpushed"`
+    LastActivity time.Time `json:"lastActivity"`
+}
+
+// WorktreeStatus - 详细状态
+type WorktreeStatus struct {
+    WorktreeID string       `json:"worktreeId"`
+    Branch     string       `json:"branch"`
+    Head       string       `json:"head"`
+    Ahead      int          `json:"ahead"`
+    Behind     int          `json:"behind"`
+    Staged     []FileStat   `json:"staged"`
+    Unstaged   []FileStat   `json:"unstaged"`
+    Untracked  []string     `json:"untracked"`
+    LastCommit *CommitInfo  `json:"lastCommit"`
+}
+```
+
+**Wails 绑定 (app.go)**：
+
+```go
+func (a *App) SetRepoPath(path string) error
+func (a *App) ListWorktrees() ([]worktree.Worktree, error)
+func (a *App) GetWorktreeStatus(name string) (*worktree.WorktreeStatus, error)
+func (a *App) ListBranches() ([]string, error)
+```
+
+**测试覆盖**：
+
+| 测试 | 覆盖场景 |
+|------|----------|
+| TestNewManager | 正常创建 |
+| TestNewManager_InvalidPath | 无效路径 |
+| TestGetStatus | 状态获取 |
+| TestManager_List | 列表返回 |
+| TestManager_List_EmptyWorktreesDir | 无额外 worktrees |
+| TestManager_GetStatusByName | 按名称查询 |
+| TestManager_GetStatusByName_WithRepoName | 仓库名查询 |
+| TestManager_GetStatusByName_NotFound | 不存在处理 |
+| TestManager_GetStatus_WithChanges | 未跟踪文件 |
+| TestManager_GetStatus_WithStagedChanges | 已暂存文件 |
+| TestManager_ListBranches | 分支列表 |
+| TestManager_GetLastActivity | 活动时间 |
 
 ---
 
@@ -1050,7 +1134,206 @@ require (
 
 ---
 
-## 7. 时间估算
+## 8. 技术方案与权衡
+
+### 8.1 问题：go-git 不直接支持 worktree 操作
+
+`go-git/v5` 库支持读取 worktree 信息，但不支持创建/删除 worktree 操作。需要通过 `exec.Command` 调用系统 `git` 命令。
+
+### 8.2 潜在风险
+
+| 风险类型 | 说明 | 影响程度 |
+|---------|------|----------|
+| **Git 版本依赖** | 不同 Git 版本命令参数可能有差异 | 中 |
+| **环境依赖** | 用户可能未安装 Git 或 Git 不在 PATH | 高 |
+| **跨平台差异** | Windows/macOS/Linux 上 Git 行为可能不同 | 中 |
+| **命令注入** | 参数未正确转义可能导致 shell 注入 | 高 |
+| **错误解析** | 需要解析命令输出字符串，容易出错 | 低 |
+| **性能开销** | 每次操作都要启动新进程 (~10-50ms) | 低 |
+| **原子性** | 命令执行中途失败，状态可能不一致 | 中 |
+| **测试困难** | 单元测试需要真实 Git 环境 | 低 |
+
+### 8.3 替代方案对比
+
+#### 方案 A: exec.Command 调用 git 命令 (当前方案)
+
+```
+优点:
+- 快速实现，功能完整
+- 支持所有 Git 功能
+- 无额外依赖
+
+缺点:
+- 依赖系统安装 Git
+- 需要解析字符串输出
+- 有命令注入风险
+```
+
+#### 方案 B: CGO + libgit2
+
+```
+优点:
+- 无需系统 Git
+- 性能更好
+- 类型安全 API
+
+缺点:
+- 需要 CGO，交叉编译复杂
+- libgit2 安装配置繁琐
+- 仍不完全支持 worktree 操作
+```
+
+#### 方案 C: Rust Sidecar (gitoxide)
+
+```
+优点:
+- 纯 Rust，无 CGO 依赖
+- gitoxide 完整支持 worktree
+- 高性能，内存安全
+- 可独立测试
+
+缺点:
+- 架构复杂度增加
+- 需要维护两套代码
+- 进程间通信开销
+```
+
+**gitoxide 仓库**: https://github.com/Byron/gitoxide
+
+```rust
+// gitoxide 示例 (Rust)
+use gix::Repository;
+
+let repo = Repository::open(".")?;
+let worktrees = repo.worktrees()?.iter().collect::<Vec<_>>();
+```
+
+### 8.4 方案对比总结
+
+| 对比项 | exec.Command (git) | CGO + libgit2 | Rust Sidecar |
+|--------|-------------------|---------------|--------------|
+| **外部依赖** | 需要系统 Git | 需要 libgit2 | 无 |
+| **性能** | 进程启动开销 | 内存调用 | 内存调用 |
+| **错误处理** | 解析字符串 | 结构化错误 | 结构化错误 |
+| **安全性** | 需手动转义 | 类型安全 | 类型安全 |
+| **跨平台** | 依赖 Git 行为 | 需编译各平台 | 需编译各平台 |
+| **可测试性** | 需要 mock 进程 | 可 mock 接口 | 可 mock 接口 |
+| **功能覆盖** | 完整 | 部分 | 完整 |
+| **实现复杂度** | 低 | 中 | 高 |
+
+### 8.5 推荐策略
+
+| 阶段 | 方案 | 理由 |
+|------|------|------|
+| **Phase 1 (v0.2)** | exec.Command | 快速实现，验证功能 |
+| **Phase 2-3 (v0.3-0.4)** | 混合架构 | go-git 读 + exec 写，优化读取性能 |
+| **v1.0+** | Rust Sidecar | 生产级可靠性，消除 Git 依赖 |
+
+### 8.6 缓解措施 (exec.Command 方案)
+
+```go
+// 1. 启动时检查 Git 版本
+func checkGitVersion() error {
+    out, err := exec.Command("git", "--version").Output()
+    if err != nil {
+        return errors.New("git not found: please install git >= 2.17")
+    }
+    // 解析版本，确保 >= 2.17 (worktree 稳定支持)
+    version := parseGitVersion(string(out))
+    if version < "2.17" {
+        return fmt.Errorf("git version too old: %s, need >= 2.17", version)
+    }
+    return nil
+}
+
+// 2. 安全转义参数 (防止命令注入)
+import "github.com/alessio/shellescape"
+
+func (m *Manager) Create(opts CreateOptions) (*Worktree, error) {
+    // 使用 shellescape 转义用户输入
+    args := []string{
+        "worktree", "add",
+        "-b", shellescape.Quote(opts.Branch),
+        shellescape.Quote(targetPath),
+        shellescape.Quote(opts.BaseBranch),
+    }
+    cmd := exec.Command("git", args...)
+    // ...
+}
+
+// 3. 结构化错误解析
+type GitError struct {
+    Code    int
+    Message string
+    Hint    string
+}
+
+func parseGitError(output []byte, err error) *GitError {
+    // 解析 git 输出的错误信息
+    // 提取有用的 hint 信息
+    lines := strings.Split(string(output), "\n")
+    ge := &GitError{Code: 1}
+    for _, line := range lines {
+        if strings.HasPrefix(line, "hint:") {
+            ge.Hint = strings.TrimPrefix(line, "hint: ")
+        } else if strings.HasPrefix(line, "fatal:") {
+            ge.Message = strings.TrimPrefix(line, "fatal: ")
+        } else if strings.HasPrefix(line, "error:") {
+            ge.Message = strings.TrimPrefix(line, "error: ")
+        }
+    }
+    return ge
+}
+
+// 4. 接口抽象 (便于后续替换实现)
+type WorktreeBackend interface {
+    List() ([]Worktree, error)
+    Create(opts CreateOptions) (*Worktree, error)
+    Delete(name string) error
+    GetStatus(path string) (*WorktreeStatus, error)
+}
+
+// 当前实现
+type GitCommandBackend struct {
+    repoPath string
+}
+
+// 未来可替换为
+type GitoxideBackend struct {
+    // Rust sidecar via IPC
+}
+```
+
+### 8.7 混合架构示意 (Phase 2+)
+
+```
+┌─────────────────────────────────────────┐
+│           Go Backend (Wails)            │
+├─────────────────────────────────────────┤
+│  go-git (读取操作)  │  exec (写入操作)   │
+│  - List worktrees   │  - Create          │
+│  - GetStatus        │  - Delete          │
+│  - Read commits     │  - Branch ops      │
+│  - Ahead/Behind     │                    │
+└─────────────────────────────────────────┘
+```
+
+### 8.8 Rust Sidecar 架构 (v1.0+)
+
+```
+┌────────────────┐     JSON-RPC/IPC     ┌────────────────┐
+│   Go Backend   │ ◄──────────────────► │  Rust gitoxide │
+│   (Wails)      │                      │  (Sidecar)     │
+│                │                      │                │
+│  - UI/IPC      │                      │  - Worktree    │
+│  - State mgmt  │                      │  - Git ops     │
+│  - Terminal    │                      │  - Status      │
+└────────────────┘                      └────────────────┘
+```
+
+---
+
+## 9. 时间估算
 
 | 任务 | 时间 |
 |------|------|
