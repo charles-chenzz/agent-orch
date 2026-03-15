@@ -16,17 +16,17 @@
 | F0.1 | Wails v2 项目创建 (wails init) | P0 | ✅ 完成 |
 | F0.2 | Go 模块结构初始化 (internal/) | P0 | ✅ 完成 |
 | F0.3 | 前端项目初始化 (React + Vite) | P0 | ✅ 完成 |
-| F0.4 | TailwindCSS 配置 | P0 | ⏸️ 待实现 |
+| F0.4 | TailwindCSS 配置 | P0 | ✅ 完成 |
 | F0.5 | TypeScript 配置 | P0 | ✅ 完成 |
 
 ### 1.2 基础 UI 布局
 
 | Feature | 描述 | 优先级 | 状态 |
 |---------|------|--------|------|
-| F0.6 | 上下分区布局 (可折叠上方 + Terminal) | P0 | ⏸️ 待实现 |
-| F0.7 | 上方面板 (Projects + Diff) | P0 | ⏸️ 待实现 |
-| F0.8 | 暗色主题基础样式 | P0 | ⏸️ 待实现 |
-| F0.9 | Diff 侧边滑出面板 | P1 | ⏸️ 待实现 |
+| F0.6 | 上下分区布局 (可折叠上方 + Terminal) | P0 | ✅ 完成 |
+| F0.7 | 上方面板 (Projects + Diff) | P0 | ✅ 完成 |
+| F0.8 | 暗色主题基础样式 (GitHub Dark Dimmed) | P0 | ✅ 完成 |
+| F0.9 | Diff 侧边滑出面板 | P1 | ✅ 完成 |
 
 #### UI 布局设计（已确认 2026-03-11）
 
@@ -66,6 +66,58 @@
 └─────────────────────────────────────────────────────────────────────────────┘
         上方面板 (可折叠, ~180px)                      下方 Terminal (flex-1)
 ```
+
+#### 布局优化思考（可选方案）
+
+当前方案以“上下分区 + 可折叠”优先保证终端空间，但在高频切换 Project / Worktree / Diff 时，用户需要反复折叠与视线跳转；在小屏下，纵向分区也容易压缩 Terminal 的可用高度。为提升可用性与降低操作成本，可作为后续迭代考虑以下布局变体（不与已确认方案冲突）：
+
+**方案 A（推荐）：左侧导航 + 主工作区 + 右侧 Inspector**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Agent Orchestrator  [Project ▾] [Worktree ▾] [API ● claude-opus] [⚙️]       │
+├─────────── Projects / Worktrees ───────────┬────────── Terminal ────────────┤
+│ 🔎 Search                                  │  [Tab: main ●] [Tab: ...]  [+] │
+│ ▼ agent-orch                               │  $ claude                      │
+│   ● main                                   │  > Working...                  │
+│   ○ feature-auth                           │                               │
+│   ○ fix-bug                                │                               │
+│                                              ├──────── Inspector ─────────┤
+│ ▶ another-project                          │  Diff List → File Diff        │
+│   (点击切换)                                │  [Accept] [Reject] [Close]    │
+├────────────────────────────────────────────┴───────────────────────────────┤
+│ Status: main @ agent-orch | ● 3 changes | Agent: claude (running)           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **好处**：导航位置固定、视线移动更少，减少“折叠-展开”的动作成本；符合 IDE 习惯。
+- **交互**：右侧 Inspector 可折叠/拖拽宽度；双击文件进入全屏 Diff；Esc 返回。
+- **适配**：当窗口变窄时，Inspector 自动变为底部抽屉（见方案 B）。
+
+**方案 B：主工作区 + 底部抽屉（小屏 / 专注模式）**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Agent Orchestrator  [Project ▾] [Worktree ▾] [API ● claude-opus] [⚙️]       │
+├───────── Terminal (flex-1) ────────────────────────────────────────────────┤
+│  [Tab: main ●] [Tab: ...] [+]                                               │
+│  $ claude                                                                   │
+│  > Working...                                                               │
+├────────── Diff Drawer (40% height, 可拖拽) ─────────────────────────────────┤
+│  ▸ src/app.tsx     +45 -12  [Open]                                          │
+│  ▸ lib/auth.ts     +120 -3                                                  │
+│  [Accept All] [Reject All] [Close]                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **好处**：保留最大终端高度；小屏下操作更集中。
+- **交互**：抽屉高度可拖拽；支持 `Cmd/Ctrl + D` 呼出/关闭。
+
+**响应式规则建议**
+
+1. 宽度 < 1100px：右侧 Inspector 自动变为底部抽屉。
+2. 宽度 < 900px：Projects 列表收为图标轨道，提供搜索与最近访问入口。
+3. 任何模式：保持 `Project/Worktree` 选择在顶部栏，避免入口被折叠隐藏。
 
 #### 核心设计决策
 
@@ -215,6 +267,151 @@ interface TerminalTab {
 
 ---
 
+#### UI 实现 (2026-03-15)
+
+**技术栈**：
+- React 18 + TypeScript
+- TailwindCSS 3.4 (自定义 GitHub Dark Dimmed 主题)
+- Zustand 5 (状态管理)
+- Wails v2 (Go 后端 + WebView)
+
+**已实现组件**：
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| TopPanel | `components/Layout/TopPanel.tsx` | 上方面板，包含 Projects + Diff 列表，可折叠 |
+| TerminalPane | `components/Layout/TerminalPane.tsx` | 终端区域，Tab 管理，状态指示 |
+| DiffPanel | `components/Layout/DiffPanel.tsx` | 侧边滑出 Diff 详情面板 |
+| StatusBar | `components/Layout/StatusBar.tsx` | 底部状态栏 |
+
+**CSS 增强**：
+
+```css
+/* 自定义动画 */
+@keyframes fadeIn { ... }
+@keyframes slideInRight { ... }
+@keyframes pulseSoft { ... }
+@keyframes statusPulse { ... }
+
+/* 工具类 */
+.animate-fade-in { ... }
+.animate-slide-in-right { ... }
+.animate-pulse-soft { ... }
+.glass-panel { ... }
+.hover-glow { ... }
+.active-scale { ... }
+```
+
+**交互细节**：
+
+1. **Projects 列表**
+   - 树形展开/折叠动画
+   - 选中态左边框高亮
+   - 变更状态脉冲指示器 (hasChanges)
+   - hover 背景变化
+
+2. **Diff 列表**
+   - 文件类型图标
+   - +/- 行数统计
+   - 点击触发侧边面板
+   - 动态文件数量徽章
+
+3. **Terminal Tab**
+   - 运行状态脉冲指示器 (animate-ping)
+   - Agent 类型标签
+   - 进度条渐变效果
+   - 光标闪烁动画
+
+4. **DiffPanel**
+   - 背景毛玻璃遮罩 (backdrop-blur)
+   - 滑入动画 (slideInRight)
+   - 统一 Diff 视图（并排显示）
+   - 键盘快捷键提示
+
+5. **StatusBar**
+   - 分支图标
+   - 变更状态徽章
+   - Agent 运行状态
+   - API 费用显示
+   - 实时时钟
+
+**状态管理**：
+
+```typescript
+// stores/appStore.ts
+interface AppState {
+  projects: Project[]
+  selectedWorktreeId: string | null
+  expandedProjectIds: string[]
+  topPanelCollapsed: boolean
+  diffPanelOpen: boolean
+  selectedDiffFile: string | null
+  activeTerminalTabId: string | null
+}
+
+// Actions
+selectWorktree(id: string): void
+toggleProjectExpand(id: string): void
+toggleTopPanel(): void
+selectDiffFile(path: string | null): void
+selectTerminalTab(id: string): void
+```
+
+**文件结构**：
+
+```
+frontend/src/
+├── App.tsx                    # 主容器
+├── main.tsx                   # 入口
+├── index.css                  # 全局样式 + 动画
+├── components/
+│   └── Layout/
+│       ├── TopPanel.tsx       # 上方面板 (Projects + Diff)
+│       ├── TerminalPane.tsx   # 终端区域
+│       ├── DiffPanel.tsx      # Diff 侧边面板
+│       └── StatusBar.tsx      # 底部状态栏
+├── stores/
+│   └── appStore.ts            # Zustand store
+└── types/
+    └── index.ts               # TypeScript 类型定义
+```
+
+---
+
+#### 改进建议 (未来迭代参考)
+
+以下是基于 UI/UX 分析的改进建议，供未来迭代参考：
+
+**1. 顶部栏增强**
+- 增加快速切换 Tab: `[▶ Projects] [▶ Diff]`
+- 便于用户快速定位当前视图
+
+**2. 状态栏信息增强**
+- 增加 Agent 状态显示: `Agent: claude (running)`
+- 让用户了解当前 AI Agent 工作状态
+
+**3. Diff 面板交互优化**
+- 面板宽度可拖拽调整
+- 双击文件 → 全屏 Diff 视图
+- 键盘导航: `j/k` 上下, `Enter` 打开, `Esc` 关闭
+- Accept/Reject 后自动跳到下一个文件
+
+**4. Projects 列表增强**
+- 搜索过滤框 (当项目多时)
+- 按最近使用排序
+- 收藏/置顶常用项目
+- 右键菜单 (New Worktree, Open in Finder, Settings)
+
+**5. 上方面板比例**
+- 支持拖拽调整 Projects/Diff 比例
+- 记住用户偏好
+
+**6. 动画细节**
+- Diff 侧边滑出时添加背景遮罩 (opacity 0→0.5)
+- 终端 Tab 切换添加滑动指示器动画
+
+---
+
 #### 历史方案 (已否决)
 
 以下是一个被否决的 UI 设计方案，记录供参考：
@@ -277,10 +474,10 @@ interface TerminalTab {
 
 | Feature | 描述 | 优先级 | 状态 |
 |---------|------|--------|------|
-| F0.14 | components/Layout/ | P0 | ⏸️ 推迟 (依赖 F0.4) |
+| F0.14 | components/Layout/ | P0 | ✅ 完成 |
 | F0.15 | hooks/ 目录 | P0 | ⏸️ 推迟 |
-| F0.16 | stores/appStore.ts | P0 | ⏸️ 推迟 |
-| F0.17 | types/index.ts | P0 | ⏸️ 推迟 |
+| F0.16 | stores/appStore.ts | P0 | ✅ 完成 |
+| F0.17 | types/index.ts | P0 | ✅ 完成 |
 
 ### 1.5 配置系统骨架
 
@@ -872,8 +1069,15 @@ func TestGetConfig(t *testing.T) {
 - [x] 应用启动无报错
 - [x] 窗口正常打开
 - [x] Wails + React 默认模板正常运行
-- [ ] 三栏布局显示正常 (推迟到 F0.4 完成后)
-- [ ] 暗色主题渲染正确 (推迟到 F0.4 完成后)
+- [x] 上下分区布局显示正常
+- [x] 暗色主题渲染正确 (GitHub Dark Dimmed)
+- [x] 上方面板可折叠
+- [x] Projects 列表展开/折叠
+- [x] Worktree 选中态
+- [x] Diff 列表显示
+- [x] Diff 侧边面板滑出动画
+- [x] Terminal Tab 切换
+- [x] StatusBar 信息显示
 - [ ] 窗口可拖拽、缩放
 - [x] 配置文件自动创建 (~/.config/agent-orch/config.toml)
 - [x] 数据库文件自动创建 (~/.config/agent-orch/data.db)
@@ -887,8 +1091,11 @@ func TestGetConfig(t *testing.T) {
 | 应用启动 | 运行 `wails dev` 能正常启动 | ✅ 通过 |
 | Go 后端结构 | internal/ 目录结构完整 | ✅ 通过 |
 | TypeScript | 前端 TypeScript 配置正确 | ✅ 通过 |
-| TailwindCSS | 样式框架配置 | ⏸️ 推迟 |
-| 三栏布局 | 基础 UI 布局 | ⏸️ 推迟 |
+| TailwindCSS | 样式框架配置 | ✅ 通过 |
+| 上下分区布局 | 基础 UI 布局 | ✅ 通过 |
+| 暗色主题 | GitHub Dark Dimmed 配色 | ✅ 通过 |
+| Diff 侧边面板 | 滑出动画、交互 | ✅ 通过 |
+| 状态管理 | Zustand store + 类型 | ✅ 通过 |
 
 ---
 

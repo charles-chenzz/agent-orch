@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #22272e;
+  --bg-surface: #2d333b;
+  --bg-elevated: #373e47;
+  --border: #373e47;
+  --border-light: #444c56;
+  --text: #adbac7;
+  --text-muted: #768390;
+  --accent: #6cb6ff;
+  --accent-muted: #539bf5;
+  --success: #57ab5a;
+  --warning: #c69026;
+  --error: #f47067;
+}
+
+html, body, #root {
+  @apply h-screen w-screen overflow-hidden bg-base text-text;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+}
+
+#root {
+  @apply flex flex-col;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Custom Utilities */
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 150ms ease-out forwards;
+  }
+
+  .animate-fade-out {
+    animation: fadeOut 100ms ease-in forwards;
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 200ms ease-out forwards;
+  }
+
+  .animate-slide-out-right {
+    animation: slideOutRight 150ms ease-in forwards;
+  }
+
+  .animate-pulse-soft {
+    animation: pulseSoft 2s ease-in-out infinite;
+  }
+
+  .transition-height {
+    transition: height 200ms ease-in-out;
+  }
+
+  /* Glass effect for panels */
+  .glass-panel {
+    background: rgba(45, 51, 59, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
+  /* Subtle hover glow */
+  .hover-glow {
+    transition: all 150ms ease;
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 0 1px var(--accent-muted);
+  }
+
+  /* Active press effect */
+  .active-scale:active {
+    transform: scale(0.98);
+  }
+
+  /* Status indicator pulse */
+  .status-pulse {
+    animation: statusPulse 2s ease-in-out infinite;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+@keyframes pulseSoft {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes statusPulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(87, 171, 90, 0.4);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 4px rgba(87, 171, 90, 0);
+  }
+}
+
+/* Focus styles */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: rgba(108, 182, 255, 0.3);
+}
