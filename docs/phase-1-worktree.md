@@ -16,8 +16,8 @@
 |---------|------|--------|------|
 | F1.1 | worktree.Manager 结构定义 | P0 | ✅ 完成 |
 | F1.2 | List() - 列出所有 worktrees | P0 | ✅ 完成 |
-| F1.3 | Create(name, branch string) - 创建 worktree | P0 | ⏸️ 待实现 |
-| F1.4 | Delete(name string) - 删除 worktree | P0 | ⏸️ 待实现 |
+| F1.3 | Create(name, branch string) - 创建 worktree | P0 | ✅ 完成 |
+| F1.4 | Delete(name string) - 删除 worktree | P0 | ✅ 完成 |
 | F1.5 | GetStatus(name string) - 获取 worktree 状态 | P0 | ✅ 完成 |
 
 ### 1.2 Go 后端 - Git 操作
@@ -57,9 +57,13 @@
 **文件结构**：
 ```
 internal/worktree/
-├── types.go        # 数据结构定义
-├── manager.go      # Manager 实现
-└── manager_test.go # 单元测试 (12 个测试用例)
+├── types.go           # 数据结构定义
+├── manager.go         # Manager 实现 (List, GetStatus)
+├── create.go          # Create 实现
+├── delete.go          # Delete 实现
+├── errors.go          # 结构化错误定义
+├── manager_test.go    # 单元测试 (25+ 测试用例)
+└── worktree_test.go   # 集成测试 (10+ 测试用例)
 ```
 
 **核心功能**：
@@ -68,12 +72,83 @@ internal/worktree/
 |------|------|------|
 | `NewManager(repoPath)` | 创建 Manager | 路径验证 + git.PlainOpen |
 | `List()` | 列出所有 worktrees | main + .git/worktrees 目录 |
+| `Create(opts)` | 创建新 worktree | 参数验证 + git worktree add |
+| `Delete(name, force)` | 删除 worktree | 安全检查 + git worktree remove |
 | `GetStatus(path)` | 获取详细状态 | staged/unstaged/untracked |
 | `GetStatusByName(name)` | 按名称获取状态 | 便捷方法 |
 | `ListBranches()` | 列出所有分支 | 额外功能 |
 | `calculateAheadBehind()` | 计算 ahead/behind | 使用 git rev-list |
 | `getLastCommit()` | 获取最后提交 | CommitInfo |
 | `getLastActivity()` | 获取最后活动时间 | 读取 .git/logs/HEAD |
+
+**Create/Delete 实现细节**：
+
+```go
+// Create 创建新的 worktree
+func (m *Manager) Create(opts CreateOptions) (*Worktree, error) {
+    // 1. 参数验证 (名称格式、分支要求)
+    // 2. 检查名称冲突
+    // 3. 检查路径是否已存在
+    // 4. 检查分支是否存在
+    // 5. 执行 git worktree add
+    // 6. 验证创建成功并返回
+}
+
+// Delete 删除 worktree
+func (m *Manager) Delete(name string, force bool) error {
+    // 1. 禁止删除 main
+    // 2. 获取 worktree 信息
+    // 3. 安全检查 (未提交变更、未推送提交)
+    // 4. 执行 git worktree remove (可选 --force)
+}
+```
+
+**结构化错误处理**：
+
+```go
+type WorktreeError struct {
+    Code    string `json:"code"`
+    Message string `json:"message"`
+}
+
+// 错误码定义
+const (
+    ErrNameRequired     = "ERR_NAME_REQUIRED"
+    ErrNameInvalid      = "ERR_NAME_INVALID"
+    ErrBranchRequired   = "ERR_BRANCH_REQUIRED"
+    ErrBranchNotFound   = "ERR_BRANCH_NOT_FOUND"
+    ErrNameConflict     = "ERR_NAME_CONFLICT"
+    ErrPathExists       = "ERR_PATH_EXISTS"
+    ErrCreateFailed     = "ERR_CREATE_FAILED"
+    ErrCannotDeleteMain = "ERR_CANNOT_DELETE_MAIN"
+    ErrHasChanges       = "ERR_HAS_CHANGES"
+    ErrHasUnpushed      = "ERR_HAS_UNPUSHED"
+    ErrNotFound         = "ERR_NOT_FOUND"
+    ErrDeleteFailed     = "ERR_DELETE_FAILED"
+)
+```
+
+**go-git Worktree 限制处理**：
+
+由于 go-git 对 linked worktree 支持有限，我们采用混合策略：
+- **读取操作**：直接读取 `.git/worktrees/name/` 目录中的文件
+- **状态检查**：使用 `git status --porcelain` 命令（更可靠）
+- **创建/删除**：使用 `git worktree add/remove` 命令
+
+```go
+// parseWorktreeDir 直接读取 worktree 元数据
+func (m *Manager) parseWorktreeDir(worktreesPath, name string) (*Worktree, error) {
+    // 读取 gitdir 文件获取实际路径
+    // 读取 HEAD 文件获取分支信息
+    // 使用 git 命令获取状态（go-git 不支持 linked worktree）
+}
+
+// getWorktreeStatusFromGit 使用 git 命令获取状态
+func (m *Manager) getWorktreeStatusFromGit(wtPath, branch string) (hasChanges bool, unpushed int) {
+    // git status --porcelain (检查变更)
+    // git rev-list --count @{upstream}..HEAD (检查未推送)
+}
+```
 
 **数据结构**：
 
@@ -116,6 +191,8 @@ func (a *App) ListBranches() ([]string, error)
 
 **测试覆盖**：
 
+单元测试 (25+ 测试用例):
+
 | 测试 | 覆盖场景 |
 |------|----------|
 | TestNewManager | 正常创建 |
@@ -130,6 +207,31 @@ func (a *App) ListBranches() ([]string, error)
 | TestManager_GetStatus_WithStagedChanges | 已暂存文件 |
 | TestManager_ListBranches | 分支列表 |
 | TestManager_GetLastActivity | 活动时间 |
+| TestManager_Create_ValidateOptions | 创建参数验证 |
+| TestManager_Create_NameConflict | 名称冲突 |
+| TestManager_Create_BranchNotFound | 分支不存在 |
+| TestManager_Create_ValidName | 有效名称 |
+| TestManager_Delete_CannotDeleteMain | 禁止删除 main |
+| TestManager_Delete_NotFound | 不存在处理 |
+| TestManager_Delete_HasChanges | 有变更检查 |
+| TestManager_Delete_Force | 强制删除 |
+| TestManager_GetWorktreeByName | 按名称获取 |
+| TestWorktreeError_* | 错误处理 |
+
+集成测试 (10+ 测试用例，需要 `go test -tags=integration`):
+
+| 测试 | 覆盖场景 |
+|------|----------|
+| TestIntegration_Create_Success | 创建成功 |
+| TestIntegration_Create_InvalidName | 无效名称 |
+| TestIntegration_Create_PathExists | 路径存在 |
+| TestIntegration_Create_NameConflict | 名称冲突 |
+| TestIntegration_Create_BranchNotFound | 分支不存在 |
+| TestIntegration_Delete_Success | 删除成功 |
+| TestIntegration_Delete_HasChanges | 有变更检查 |
+| TestIntegration_Delete_CannotDeleteMain | 禁止删除 main |
+| TestIntegration_Delete_NotFound | 不存在处理 |
+| TestIntegration_Isolation | 测试隔离验证 |
 
 ---
 

@@ -68,3 +68,24 @@ func (a *App) ListBranches() ([]string, error) {
 	}
 	return a.worktree.ListBranches()
 }
+
+// CreateWorktree 创建新的 worktree
+func (a *App) CreateWorktree(opts worktree.CreateOptions) (*worktree.Worktree, error) {
+	if a.worktree == nil {
+		return nil, fmt.Errorf("repository not initialized, call SetRepoPath first")
+	}
+	return a.worktree.Create(opts)
+}
+
+// DeleteWorktree 删除 worktree
+func (a *App) DeleteWorktree(name string, force bool) error {
+	if a.worktree == nil {
+		return fmt.Errorf("repository not initialized, call SetRepoPath first")
+	}
+	return a.worktree.Delete(name, force)
+}
+
+// GetRepoPath 返回当前仓库路径
+func (a *App) GetRepoPath() string {
+	return a.repoPath
+}

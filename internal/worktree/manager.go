@@ -118,6 +118,8 @@ func (m *Manager) getMainWorktree() (*Worktree, error) {
 }
 
 // parseWorktreeDir 解析 worktree 目录信息.
+// 直接读取 .git/worktrees/name/ 目录中的文件，而不是使用 go-git，
+// 因为 go-git 对 linked worktree 的支持有限。
 func (m *Manager) parseWorktreeDir(worktreesPath, name string) (*Worktree, error) {
 	wtDir := filepath.Join(worktreesPath, name)
 
@@ -129,40 +131,46 @@ func (m *Manager) parseWorktreeDir(worktreesPath, name string) (*Worktree, error
 	}
 
 	// 解析实际路径
-	// gitdir 文件内容如: /path/to/worktree/.git/worktrees/name
-	// 实际 worktree 路径是其父目录的父目录
+	// gitdir 文件内容如: /path/to/worktree/.git
+	// 实际 worktree 路径是其父目录
 	gitdir := strings.TrimSpace(string(data))
-	actualPath := filepath.Dir(filepath.Dir(gitdir))
+	actualPath := filepath.Dir(gitdir)
 
 	// 验证路径存在
 	if _, err := os.Stat(actualPath); err != nil {
 		return nil, fmt.Errorf("worktree path does not exist: %s", actualPath)
 	}
 
-	// 打开该 worktree 的仓库
-	wtRepo, err := git.PlainOpen(actualPath)
+	// 直接读取 HEAD 文件 (在 .git/worktrees/name/HEAD)
+	headFile := filepath.Join(wtDir, "HEAD")
+	headData, err := os.ReadFile(headFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open worktree repo: %w", err)
+		return nil, fmt.Errorf("failed to read HEAD: %w", err)
 	}
 
-	head, err := wtRepo.Head()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree HEAD: %w", err)
+	headContent := strings.TrimSpace(string(headData))
+	var branch, headHash string
+
+	// HEAD 内容格式:
+	// - "ref: refs/heads/branch-name" (在分支上)
+	// - "abc1234..." (detached HEAD)
+	if strings.HasPrefix(headContent, "ref: refs/heads/") {
+		branch = strings.TrimPrefix(headContent, "ref: refs/heads/")
+		// 需要从 refs/heads/branch 获取 commit hash
+		refFile := filepath.Join(m.repoPath, ".git", "refs", "heads", branch)
+		if hashData, err := os.ReadFile(refFile); err == nil {
+			headHash = strings.TrimSpace(string(hashData))[:7]
+		} else {
+			// 可能在 packed-refs 中
+			headHash = m.getCommitHashFromPackedRefs(branch)
+		}
+	} else {
+		// Detached HEAD
+		headHash = headContent[:7]
 	}
 
-	branch := ""
-	if head.Name().IsBranch() {
-		branch = head.Name().Short()
-	}
-
-	// 获取状态
-	status, _ := m.GetStatus(actualPath)
-	hasChanges := false
-	unpushed := 0
-	if status != nil {
-		hasChanges = len(status.Staged) > 0 || len(status.Unstaged) > 0 || len(status.Untracked) > 0
-		unpushed = status.Ahead
-	}
+	// 使用 git 命令获取状态 (go-git 对 worktree 支持有限)
+	hasChanges, unpushed := m.getWorktreeStatusFromGit(actualPath, branch)
 
 	// 获取最后活动时间
 	lastActivity := m.getLastActivity(actualPath)
@@ -172,12 +180,66 @@ func (m *Manager) parseWorktreeDir(worktreesPath, name string) (*Worktree, error
 		Name:         filepath.Base(actualPath),
 		Path:         actualPath,
 		Branch:       branch,
-		Head:         head.Hash().String()[:7],
+		Head:         headHash,
 		IsMain:       false,
 		HasChanges:   hasChanges,
 		Unpushed:     unpushed,
 		LastActivity: lastActivity,
 	}, nil
+}
+
+// getWorktreeStatusFromGit 使用 git 命令获取 worktree 状态.
+// go-git 对 linked worktree 的支持有限，使用 git 命令更可靠。
+func (m *Manager) getWorktreeStatusFromGit(wtPath, branch string) (hasChanges bool, unpushed int) {
+	// 检查是否有未提交的变更
+	// git status --porcelain 返回空则无变更
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = wtPath
+	output, err := cmd.Output()
+	if err == nil {
+		hasChanges = len(strings.TrimSpace(string(output))) > 0
+	}
+
+	// 检查 unpushed 提交数
+	// git rev-list --count @{upstream}..HEAD
+	if branch != "" {
+		cmd = exec.Command("git", "rev-list", "--count", "@{upstream}..HEAD")
+		cmd.Dir = wtPath
+		output, err = cmd.Output()
+		if err == nil {
+			count := strings.TrimSpace(string(output))
+			if count != "" && count != "0" {
+				fmt.Sscanf(count, "%d", &unpushed)
+			}
+		}
+	}
+
+	return hasChanges, unpushed
+}
+
+// getCommitHashFromPackedRefs 从 packed-refs 文件获取 commit hash.
+func (m *Manager) getCommitHashFromPackedRefs(branch string) string {
+	packedRefsPath := filepath.Join(m.repoPath, ".git", "packed-refs")
+	data, err := os.ReadFile(packedRefsPath)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	targetRef := "refs/heads/" + branch
+	for _, line := range lines {
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 && parts[1] == targetRef {
+			if len(parts[0]) >= 7 {
+				return parts[0][:7]
+			}
+			return parts[0]
+		}
+	}
+	return ""
 }
 
 // GetStatus 获取 worktree 的详细状态.

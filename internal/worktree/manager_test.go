@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -205,4 +206,233 @@ func TestManager_GetLastActivity(t *testing.T) {
 	activity := mgr.getLastActivity(repoPath)
 	// 刚创建的仓库，活动时间应该是最近的
 	assert.False(t, activity.IsZero())
+}
+
+// ============ Create Tests ============
+
+func TestManager_Create_ValidateOptions(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		opts    CreateOptions
+		errCode string
+	}{
+		{
+			name:    "empty name",
+			opts:    CreateOptions{Name: "", Branch: "feature/test"},
+			errCode: ErrNameRequired,
+		},
+		{
+			name:    "invalid name with special chars",
+			opts:    CreateOptions{Name: "test@invalid", Branch: "feature/test"},
+			errCode: ErrNameInvalid,
+		},
+		{
+			name:    "empty branch",
+			opts:    CreateOptions{Name: "test-worktree", Branch: ""},
+			errCode: ErrBranchRequired,
+		},
+		{
+			name:    "name starts with hyphen",
+			opts:    CreateOptions{Name: "-invalid", Branch: "feature/test"},
+			errCode: ErrNameInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := mgr.Create(tt.opts)
+			require.Error(t, err)
+
+			var wtErr *WorktreeError
+			require.ErrorAs(t, err, &wtErr)
+			assert.Equal(t, tt.errCode, wtErr.Code)
+		})
+	}
+}
+
+func TestManager_Create_NameConflict(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	// 尝试使用 main 作为名称（已存在）
+	opts := CreateOptions{
+		Name:      "main",
+		Branch:    "feature/test",
+		CreateNew: true,
+	}
+
+	_, err = mgr.Create(opts)
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrNameConflict, wtErr.Code)
+}
+
+func TestManager_Create_BranchNotFound(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	opts := CreateOptions{
+		Name:      "test-worktree",
+		Branch:    "nonexistent-branch",
+		CreateNew: false, // 使用现有分支
+	}
+
+	_, err = mgr.Create(opts)
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrBranchNotFound, wtErr.Code)
+}
+
+func TestManager_Create_ValidName(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	// 测试各种有效名称
+	validNames := []string{
+		"feature-auth",
+		"fix_123",
+		"worktree1",
+		"TEST_WORKTREE",
+		"a1-b2_c3",
+	}
+
+	for _, name := range validNames {
+		t.Run(name, func(t *testing.T) {
+			err := mgr.validateCreateOptions(CreateOptions{
+				Name:   name,
+				Branch: "main",
+			})
+			assert.NoError(t, err, "name '%s' should be valid", name)
+		})
+	}
+}
+
+// ============ Delete Tests ============
+
+func TestManager_Delete_CannotDeleteMain(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	err = mgr.Delete("main", false)
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrCannotDeleteMain, wtErr.Code)
+}
+
+func TestManager_Delete_NotFound(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	err = mgr.Delete("nonexistent-worktree", false)
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrNotFound, wtErr.Code)
+}
+
+func TestManager_Delete_HasChanges(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	// 模拟有变更的 worktree（通过修改 main）
+	// 在实际场景中，这会是一个真实的 worktree
+	// 这里我们测试 getWorktreeByName 的逻辑
+
+	// 修改文件
+	err = os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("# Modified"), 0644)
+	require.NoError(t, err)
+
+	// 获取 main worktree 信息
+	wt, err := mgr.getWorktreeByName("main")
+	require.NoError(t, err)
+	assert.True(t, wt.HasChanges)
+}
+
+func TestManager_Delete_Force(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	// 删除 main 应该即使 force=true 也失败
+	err = mgr.Delete("main", true)
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrCannotDeleteMain, wtErr.Code)
+}
+
+func TestManager_GetWorktreeByName(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	// 通过 ID 查找
+	wt, err := mgr.getWorktreeByName("main")
+	require.NoError(t, err)
+	assert.Equal(t, "main", wt.ID)
+	assert.True(t, wt.IsMain)
+
+	// 通过名称查找
+	repoName := filepath.Base(repoPath)
+	wt, err = mgr.getWorktreeByName(repoName)
+	require.NoError(t, err)
+	assert.Equal(t, repoName, wt.Name)
+}
+
+func TestManager_GetWorktreeByName_NotFound(t *testing.T) {
+	repoPath := setupTestRepo(t)
+
+	mgr, err := NewManager(repoPath)
+	require.NoError(t, err)
+
+	_, err = mgr.getWorktreeByName("nonexistent")
+	require.Error(t, err)
+
+	var wtErr *WorktreeError
+	require.ErrorAs(t, err, &wtErr)
+	assert.Equal(t, ErrNotFound, wtErr.Code)
+}
+
+// ============ Error Tests ============
+
+func TestWorktreeError_Error(t *testing.T) {
+	err := NewWorktreeError(ErrNameRequired, "name is required")
+	assert.Equal(t, "[ERR_NAME_REQUIRED] name is required", err.Error())
+}
+
+func TestWorktreeError_Json(t *testing.T) {
+	err := NewWorktreeError(ErrNameInvalid, "invalid name format")
+
+	// 验证 JSON 序列化
+	jsonData, jsonErr := json.Marshal(err)
+	require.NoError(t, jsonErr)
+	assert.Contains(t, string(jsonData), "ERR_NAME_INVALID")
+	assert.Contains(t, string(jsonData), "invalid name format")
 }

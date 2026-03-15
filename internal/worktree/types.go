@@ -44,8 +44,10 @@ type CommitInfo struct {
 	Time    time.Time `json:"time"`
 }
 
-// TerminalExecutor interface for creating terminal sessions.
-// Will be implemented by terminal module in Phase 2.
-type TerminalExecutor interface {
-	CreateSession(id, cwd string) error
+// CreateOptions 创建 worktree 的选项.
+type CreateOptions struct {
+	Name       string `json:"name"`       // worktree 名称
+	Branch     string `json:"branch"`     // 分支名
+	BaseBranch string `json:"baseBranch"` // 基础分支 (创建新分支时使用)
+	CreateNew  bool   `json:"createNew"`  // 是否创建新分支
 }
