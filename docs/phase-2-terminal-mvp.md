@@ -17,8 +17,8 @@
 | F2.2 | CreateSession(id, cwd string) | P0 |
 | F2.3 | SendInput(id, data string) | P0 |
 | F2.4 | Resize(id, cols, rows) | P0 |
-| F2.5 | Close(id string) | P0 |
-| F2.6 | 输出流事件发送 | P0 |
+| F2.5 | DetachSession(id string) | P0 |
+| F2.6 | 输出流事件发送（统一事件协议） | P0 |
 
 ### 1.2 Go 后端 - tmux 集成
 
@@ -27,7 +27,8 @@
 | F2.7 | tmux 可用性检测 | P0 |
 | F2.8 | tmux session 创建/附加 | P0 |
 | F2.9 | tmux session 列表 | P1 |
-| F2.10 | tmux session 销毁 | P0 |
+| F2.10 | tmux session 销毁（显式 Destroy） | P0 |
+| F2.20 | tmux 保活策略（UI 关闭仅 detach） | P0 |
 
 ### 1.3 前端 - xterm.js 集成
 
@@ -47,6 +48,14 @@
 | F2.17 | useTerminal hook | P0 |
 | F2.18 | terminalStore | P0 |
 | F2.19 | 单终端 Tab UI | P0 |
+| F2.21 | 会话重连与状态同步 UI | P1 |
+
+### 1.5 会话状态与协议
+
+| Feature | 描述 | 优先级 |
+|---------|------|--------|
+| F2.22 | 会话状态机（creating/running/detached/exited/destroyed） | P0 |
+| F2.23 | 统一事件协议（terminal:output/state/error/exit） | P0 |
 
 ---
 
@@ -908,3 +917,97 @@ require (
 1. **Windows 不支持 tmux**：Windows 用户将直接使用 shell
 2. **无持久化**：应用重启后终端会话丢失（Phase 3 解决）
 3. **单终端**：每个 worktree 暂时只支持一个终端（Phase 3 支持多 Tab）
+
+---
+
+## 9. 方案对比（当前 vs 推荐）
+
+### 9.1 架构层面对比
+
+| 维度 | 当前方案（tmux+PTY直连） | 推荐方案（tmux + SessionBridge） |
+|------|---------------------------|----------------------------------|
+| 会话模型 | `Session` 同时承载进程、PTY、UI关系 | 分层：`TmuxSession` / `BridgeAttach` / `UITab` |
+| 关闭 Tab 语义 | `Close` 常等价 kill | **Close=Detach**，Destroy 才 kill（保活优先） |
+| 事件协议 | `terminal-output-${id}` 动态事件名 | 统一事件：`terminal:output/state/error/exit` |
+| 重连能力 | 弱（前端重建可能丢上下文） | 强（UI可重连既有 tmux 会话） |
+| 并发安全 | `CloseAll -> Close` 有锁重入风险 | 统一 teardown 路径，规避死锁 |
+| 可观测性 | 错误以字符串为主 | 错误码 + 状态机 + 可追踪事件 |
+| 扩展性（Phase 3+） | 一般 | 高（多窗口/多订阅/恢复自然） |
+
+### 9.2 API 语义对比
+
+| 能力 | 当前文档接口 | 推荐接口语义 |
+|------|--------------|-------------|
+| 创建 | `CreateSession` | `CreateOrAttachSession` |
+| 输入 | `SendInput` | `SendInput`（不变） |
+| Resize | `Resize` | `Resize`（不变） |
+| 关闭 UI | `Close` | `DetachSession` |
+| 销毁会话 | `Close` 内隐含 kill | `DestroySession`（显式） |
+| 列表 | `ListSessions` | `ListSessions` + `ListDetachedSessions`（可选） |
+
+---
+
+## 10. 简化数据流图
+
+### 10.1 当前方案（直连）
+
+```text
+[React xterm]
+   │ onData
+   ▼
+[Wails IPC: SendInput(sessionId,data)]
+   ▼
+[terminal.Manager]
+   ▼
+[PTY <-> tmux/shell process]
+   │ stdout/stderr
+   ▼
+[readOutput goroutine]
+   ▼
+[Wails EventsEmit("terminal-output-${id}", chunk)]
+   ▼
+[React EventsOn -> term.write()]
+```
+
+### 10.2 推荐方案（SessionBridge）
+
+```text
+[React xterm tab]
+   │ onData
+   ▼
+[IPC: SendInput(sessionId,data)]
+   ▼
+[SessionBridge]  (I/O路由, 状态管理, 重连)
+   ▼
+[tmux session]  (长期存活)
+   │ output stream
+   ▼
+[SessionBridge normalize event]
+   ▼
+[EventsEmit("terminal:output", {sessionId,chunk,ts})]
+   ▼
+[React route by sessionId -> term.write()]
+```
+
+---
+
+## 11. 生命周期流（保活优先）
+
+```text
+CreateOrAttach
+  └─> running
+       ├─ UI tab close -> detached (tmux仍在)
+       ├─ UI reopen    -> running (reattach)
+       ├─ process exit -> exited
+       └─ user destroy -> destroyed (kill tmux)
+```
+
+---
+
+## 12. 设计建议（落地优先）
+
+1. **默认保活语义**：关闭 Tab 仅 detach，不 kill tmux  
+2. **统一事件协议**：避免动态事件名膨胀，前端按 `sessionId` 路由  
+3. **统一 teardown**：避免 `CloseAll` 持锁调用 `Close` 造成死锁  
+4. **状态驱动 UI**：tab 状态由 `terminal:state` 事件驱动，不靠前端猜测  
+5. **先聚焦终端 MVP**：Diff 弹出页在 Phase 2 仅保留接口占位，不进入实现
