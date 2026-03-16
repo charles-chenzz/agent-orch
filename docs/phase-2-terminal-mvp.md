@@ -13,22 +13,23 @@
 
 | Feature | 描述 | 优先级 |
 |---------|------|--------|
-| F2.1 | terminal.Manager 结构 | P0 |
-| F2.2 | CreateSession(id, cwd string) | P0 |
+| F2.1 | terminal.Manager 结构（含 sessions 状态管理） | P0 |
+| F2.2 | CreateOrAttachSession(id, cwd string) - 创建或复用 tmux session | P0 |
 | F2.3 | SendInput(id, data string) | P0 |
 | F2.4 | Resize(id, cols, rows) | P0 |
-| F2.5 | DetachSession(id string) | P0 |
-| F2.6 | 输出流事件发送（统一事件协议） | P0 |
+| F2.5 | DetachSession(id string) - 仅断开 UI 连接，tmux 保活 | P0 |
+| F2.5a | DestroySession(id string) - 彻底销毁 tmux session | P0 |
+| F2.6 | 统一事件协议（terminal:output/state/error/exit） | P0 |
 
 ### 1.2 Go 后端 - tmux 集成
 
 | Feature | 描述 | 优先级 |
 |---------|------|--------|
 | F2.7 | tmux 可用性检测 | P0 |
-| F2.8 | tmux session 创建/附加 | P0 |
-| F2.9 | tmux session 列表 | P1 |
-| F2.10 | tmux session 销毁（显式 Destroy） | P0 |
-| F2.20 | tmux 保活策略（UI 关闭仅 detach） | P0 |
+| F2.8 | tmux session 创建/附加（-A 参数） | P0 |
+| F2.9 | tmux session 列表（含 detached 状态） | P1 |
+| F2.10 | tmux session 销毁（显式 kill-session） | P0 |
+| F2.20 | tmux 保活策略（UI 关闭仅 detach，不 kill） | P0 |
 
 ### 1.3 前端 - xterm.js 集成
 
@@ -37,7 +38,7 @@
 | F2.11 | xterm.js 初始化 | P0 |
 | F2.12 | FitAddon 集成 | P0 |
 | F2.13 | 输入事件处理 | P0 |
-| F2.14 | 输出渲染 | P0 |
+| F2.14 | 输出渲染（统一事件路由） | P0 |
 | F2.15 | 基础主题配置 | P0 |
 
 ### 1.4 前端 - 终端组件
@@ -46,7 +47,7 @@
 |---------|------|--------|
 | F2.16 | Terminal.tsx 组件 | P0 |
 | F2.17 | useTerminal hook | P0 |
-| F2.18 | terminalStore | P0 |
+| F2.18 | terminalStore（含 session 状态） | P0 |
 | F2.19 | 单终端 Tab UI | P0 |
 | F2.21 | 会话重连与状态同步 UI | P1 |
 
@@ -54,8 +55,9 @@
 
 | Feature | 描述 | 优先级 |
 |---------|------|--------|
-| F2.22 | 会话状态机（creating/running/detached/exited/destroyed） | P0 |
-| F2.23 | 统一事件协议（terminal:output/state/error/exit） | P0 |
+| F2.22 | Session.State 字段 + 状态机（creating/running/detached/exited/destroyed） | P0 |
+| F2.23 | StateChange 事件发送（terminal:state） | P0 |
+| F2.24 | 统一事件协议（terminal:output/state/error/exit） | P0 |
 
 ---
 
@@ -68,20 +70,34 @@
 package terminal
 
 import (
+    "context"
     "os"
     "os/exec"
     "sync"
     "time"
 )
 
+// SessionState 会话状态
+type SessionState string
+
+const (
+    StateCreating  SessionState = "creating"
+    StateRunning   SessionState = "running"
+    StateDetached  SessionState = "detached"
+    StateExited    SessionState = "exited"
+    StateDestroyed SessionState = "destroyed"
+)
+
 type Session struct {
     ID          string
     WorktreeID  string
     CWD         string
+    State       SessionState    // 当前状态
     PTY         *os.File
     Cmd         *exec.Cmd
-    TmuxSession string    // tmux session 名称
+    TmuxSession string          // tmux session 名称
     CreatedAt   time.Time
+    LastActive  time.Time       // 最后活动时间
 }
 
 type Manager struct {
@@ -105,6 +121,16 @@ type TerminalTheme struct {
     Cursor     string
     Selection  string
 }
+
+// EventPayload 统一事件负载
+type EventPayload struct {
+    SessionID string `json:"sessionId"`
+    Type      string `json:"type"`       // output/state/error/exit
+    Data      string `json:"data,omitempty"`
+    State     string `json:"state,omitempty"`
+    Error     string `json:"error,omitempty"`
+    Timestamp int64  `json:"ts"`
+}
 ```
 
 ### 2.2 Go 后端 - Manager 实现
@@ -119,14 +145,15 @@ import (
     "os"
     "os/exec"
     "sync"
-    
+    "time"
+
     "github.com/creack/pty"
     "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func NewManager(ctx context.Context) *Manager {
     tmuxPath, hasTmux := exec.LookPath("tmux")
-    
+
     return &Manager{
         sessions: make(map[string]*Session),
         ctx:      ctx,
@@ -135,22 +162,37 @@ func NewManager(ctx context.Context) *Manager {
     }
 }
 
-// CreateSession 创建新的终端会话
-func (m *Manager) CreateSession(id, worktreeID, cwd string) error {
+// CreateOrAttachSession 创建或附加到现有会话
+func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
     m.mu.Lock()
     defer m.mu.Unlock()
-    
-    // 检查是否已存在
-    if _, exists := m.sessions[id]; exists {
-        return fmt.Errorf("session already exists: %s", id)
+
+    // 检查是否已存在 detached 的会话
+    if session, exists := m.sessions[id]; exists {
+        if session.State == StateDetached {
+            // 重新附加
+            return m.attachSession(session)
+        }
+        return fmt.Errorf("session already running: %s", id)
     }
-    
+
+    // 创建新会话
+    session := &Session{
+        ID:          id,
+        WorktreeID:  worktreeID,
+        CWD:         cwd,
+        State:       StateCreating,
+        CreatedAt:   time.Now(),
+        LastActive:  time.Now(),
+    }
+    m.sessions[id] = session
+
     var ptyFile *os.File
     var cmd *exec.Cmd
     var tmuxSession string
-    
+
     if m.hasTmux {
-        // 使用 tmux
+        // 使用 tmux（-A 如果不存在则创建）
         tmuxSession = fmt.Sprintf("agent-orch-%s", id)
         cmd = exec.Command(m.tmuxPath, "new-session",
             "-A",              // 如果不存在则创建
@@ -166,49 +208,92 @@ func (m *Manager) CreateSession(id, worktreeID, cwd string) error {
         cmd = exec.Command(shell)
         cmd.Dir = cwd
     }
-    
+
     // 启动 PTY
     var err error
     ptyFile, err = pty.Start(cmd)
     if err != nil {
+        session.State = StateDestroyed
+        m.emitState(session)
         return fmt.Errorf("failed to start pty: %w", err)
     }
-    
-    session := &Session{
-        ID:          id,
-        WorktreeID:  worktreeID,
-        CWD:         cwd,
-        PTY:         ptyFile,
-        Cmd:         cmd,
-        TmuxSession: tmuxSession,
-        CreatedAt:   time.Now(),
-    }
-    
-    m.sessions[id] = session
-    
+
+    session.PTY = ptyFile
+    session.Cmd = cmd
+    session.TmuxSession = tmuxSession
+    session.State = StateRunning
+    m.emitState(session)
+
     // 启动输出读取协程
     go m.readOutput(session)
-    
+
     return nil
 }
 
-// readOutput 读取 PTY 输出并发送到前端
+// attachSession 重新附加到 detached 的会话
+func (m *Manager) attachSession(session *Session) error {
+    if session.TmuxSession == "" || !m.hasTmux {
+        return fmt.Errorf("cannot reattach to non-tmux session")
+    }
+
+    // tmux session 仍在运行，只需重新附加
+    session.State = StateRunning
+    session.LastActive = time.Now()
+    m.emitState(session)
+
+    // 重新启动输出读取
+    go m.readOutput(session)
+
+    return nil
+}
+
+// readOutput 读取 PTY 输出并发送到前端（统一事件协议）
 func (m *Manager) readOutput(session *Session) {
     buf := make([]byte, 4096)
-    
+
     for {
         n, err := session.PTY.Read(buf)
         if err != nil {
             // PTY 关闭或出错
-            m.Close(session.ID)
+            m.handleSessionExit(session.ID)
             return
         }
-        
+
         if n > 0 {
-            // 通过 Wails 事件发送到前端
-            runtime.EventsEmit(m.ctx, fmt.Sprintf("terminal-output-%s", session.ID), string(buf[:n]))
+            // 统一事件协议
+            m.emitOutput(session.ID, string(buf[:n]))
         }
     }
+}
+
+// emitOutput 发送输出事件（统一协议）
+func (m *Manager) emitOutput(sessionID, data string) {
+    runtime.EventsEmit(m.ctx, "terminal:output", EventPayload{
+        SessionID: sessionID,
+        Type:      "output",
+        Data:      data,
+        Timestamp: time.Now().UnixMilli(),
+    })
+}
+
+// emitState 发送状态变更事件
+func (m *Manager) emitState(session *Session) {
+    runtime.EventsEmit(m.ctx, "terminal:state", EventPayload{
+        SessionID: session.ID,
+        Type:      "state",
+        State:     string(session.State),
+        Timestamp: time.Now().UnixMilli(),
+    })
+}
+
+// emitError 发送错误事件
+func (m *Manager) emitError(sessionID, errMsg string) {
+    runtime.EventsEmit(m.ctx, "terminal:error", EventPayload{
+        SessionID: sessionID,
+        Type:      "error",
+        Error:     errMsg,
+        Timestamp: time.Now().UnixMilli(),
+    })
 }
 
 // SendInput 发送输入到 PTY
@@ -216,11 +301,15 @@ func (m *Manager) SendInput(id, data string) error {
     m.mu.RLock()
     session, ok := m.sessions[id]
     m.mu.RUnlock()
-    
+
     if !ok {
         return fmt.Errorf("session not found: %s", id)
     }
-    
+
+    if session.State != StateRunning {
+        return fmt.Errorf("session not running: %s (state: %s)", id, session.State)
+    }
+
     _, err := session.PTY.Write([]byte(data))
     return err
 }
@@ -230,78 +319,156 @@ func (m *Manager) Resize(id string, cols, rows uint16) error {
     m.mu.RLock()
     session, ok := m.sessions[id]
     m.mu.RUnlock()
-    
+
     if !ok {
         return fmt.Errorf("session not found: %s", id)
     }
-    
+
     return pty.Setsize(session.PTY, &pty.Winsize{
         Cols: cols,
         Rows: rows,
     })
 }
 
-// Close 关闭终端会话
-func (m *Manager) Close(id string) error {
+// DetachSession 断开会话（tmux 保活）
+func (m *Manager) DetachSession(id string) error {
     m.mu.Lock()
     defer m.mu.Unlock()
-    
+
     session, ok := m.sessions[id]
     if !ok {
-        return nil // 已经关闭
+        return nil // 已经不存在
     }
-    
+
+    // 关闭 PTY 文件句柄（但不杀死进程）
+    if session.PTY != nil {
+        session.PTY.Close()
+        session.PTY = nil
+    }
+
+    // 更新状态
+    session.State = StateDetached
+    m.emitState(session)
+
+    // 从内存中移除（tmux session 仍在后台运行）
+    delete(m.sessions, id)
+
+    return nil
+}
+
+// DestroySession 彻底销毁会话
+func (m *Manager) DestroySession(id string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    session, ok := m.sessions[id]
+    if !ok {
+        return nil // 已经不存在
+    }
+
     // 关闭 PTY
     if session.PTY != nil {
         session.PTY.Close()
     }
-    
+
     // 如果使用 tmux，杀死 session
     if session.TmuxSession != "" && m.hasTmux {
         exec.Command(m.tmuxPath, "kill-session", "-t", session.TmuxSession).Run()
     }
-    
+
     // 等待进程结束
     if session.Cmd != nil && session.Cmd.Process != nil {
         session.Cmd.Process.Kill()
     }
-    
+
+    // 发送销毁事件
+    session.State = StateDestroyed
+    m.emitState(session)
+
     delete(m.sessions, id)
     return nil
 }
 
-// CloseAll 关闭所有会话
-func (m *Manager) CloseAll() {
+// handleSessionExit 处理会话退出（进程自然结束）
+func (m *Manager) handleSessionExit(id string) {
     m.mu.Lock()
     defer m.mu.Unlock()
-    
+
+    session, ok := m.sessions[id]
+    if !ok {
+        return
+    }
+
+    session.State = StateExited
+    m.emitState(session)
+
+    // 清理资源
+    if session.PTY != nil {
+        session.PTY.Close()
+    }
+
+    delete(m.sessions, id)
+}
+
+// CloseAll 销毁所有会话
+func (m *Manager) CloseAll() {
+    m.mu.Lock()
+    // 先收集所有 ID，避免遍历时修改
+    ids := make([]string, 0, len(m.sessions))
     for id := range m.sessions {
-        m.Close(id)
+        ids = append(ids, id)
+    }
+    m.mu.Unlock()
+
+    // 逐个销毁（不持锁调用 DestroySession）
+    for _, id := range ids {
+        m.DestroySession(id)
     }
 }
 
-// ListSessions 列出所有会话
+// ListSessions 列出所有活跃会话
 func (m *Manager) ListSessions() []SessionInfo {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    
+
     var infos []SessionInfo
     for _, session := range m.sessions {
         infos = append(infos, SessionInfo{
             ID:         session.ID,
             WorktreeID: session.WorktreeID,
             CWD:        session.CWD,
+            State:      string(session.State),
             CreatedAt:  session.CreatedAt,
+            LastActive: session.LastActive,
         })
     }
     return infos
+}
+
+// GetSessionState 获取会话状态
+func (m *Manager) GetSessionState(id string) (SessionState, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    session, ok := m.sessions[id]
+    if !ok {
+        return "", fmt.Errorf("session not found: %s", id)
+    }
+    return session.State, nil
+}
+
+// HasTmux 返回 tmux 是否可用
+func (m *Manager) HasTmux() bool {
+    return m.hasTmux
 }
 
 type SessionInfo struct {
     ID         string    `json:"id"`
     WorktreeID string    `json:"worktreeId"`
     CWD        string    `json:"cwd"`
+    State      string    `json:"state"`
     CreatedAt  time.Time `json:"createdAt"`
+    LastActive time.Time `json:"lastActive"`
 }
 ```
 
@@ -309,13 +476,13 @@ type SessionInfo struct {
 
 ```go
 // app.go (新增)
-func (a *App) CreateTerminal(id, worktreeId string) error {
+func (a *App) CreateOrAttachTerminal(id, worktreeId string) error {
     // 获取 worktree 路径
     worktrees, err := a.worktree.List()
     if err != nil {
         return err
     }
-    
+
     var cwd string
     for _, wt := range worktrees {
         if wt.ID == worktreeId {
@@ -323,12 +490,12 @@ func (a *App) CreateTerminal(id, worktreeId string) error {
             break
         }
     }
-    
+
     if cwd == "" {
         return fmt.Errorf("worktree not found: %s", worktreeId)
     }
-    
-    return a.terminal.CreateSession(id, worktreeId, cwd)
+
+    return a.terminal.CreateOrAttachSession(id, worktreeId, cwd)
 }
 
 func (a *App) SendTerminalInput(id, data string) error {
@@ -339,12 +506,26 @@ func (a *App) ResizeTerminal(id string, cols, rows uint16) error {
     return a.terminal.Resize(id, cols, rows)
 }
 
-func (a *App) CloseTerminal(id string) error {
-    return a.terminal.Close(id)
+// DetachTerminal 断开终端（保活，可重连）
+func (a *App) DetachTerminal(id string) error {
+    return a.terminal.DetachSession(id)
+}
+
+// DestroyTerminal 彻底销毁终端
+func (a *App) DestroyTerminal(id string) error {
+    return a.terminal.DestroySession(id)
 }
 
 func (a *App) ListTerminalSessions() []terminal.SessionInfo {
     return a.terminal.ListSessions()
+}
+
+func (a *App) GetTerminalState(id string) (string, error) {
+    state, err := a.terminal.GetSessionState(id)
+    if err != nil {
+        return "", err
+    }
+    return string(state), nil
 }
 
 func (a *App) HasTmux() bool {
@@ -356,11 +537,16 @@ func (a *App) HasTmux() bool {
 
 ```typescript
 // frontend/src/types/terminal.ts
+
+export type SessionState = 'creating' | 'running' | 'detached' | 'exited' | 'destroyed'
+
 export interface SessionInfo {
   id: string
   worktreeId: string
   cwd: string
+  state: SessionState
   createdAt: string
+  lastActive: string
 }
 
 export interface TerminalConfig {
@@ -376,6 +562,24 @@ export interface TerminalTheme {
   cursor: string
   selection: string
 }
+
+// 统一事件协议
+export interface TerminalEvent {
+  sessionId: string
+  type: 'output' | 'state' | 'error' | 'exit'
+  data?: string
+  state?: SessionState
+  error?: string
+  ts: number  // timestamp in ms
+}
+
+// 事件类型常量
+export const TERMINAL_EVENTS = {
+  OUTPUT: 'terminal:output',
+  STATE: 'terminal:state',
+  ERROR: 'terminal:error',
+  EXIT: 'terminal:exit',
+} as const
 ```
 
 ### 2.5 前端 - Store
@@ -383,11 +587,13 @@ export interface TerminalTheme {
 ```typescript
 // frontend/src/stores/terminalStore.ts
 import { create } from 'zustand'
-import { SessionInfo } from '../types/terminal'
+import { SessionInfo, SessionState, TerminalEvent, TERMINAL_EVENTS } from '../types/terminal'
 import {
-  CreateTerminal,
-  CloseTerminal,
+  CreateOrAttachTerminal,
+  DetachTerminal,
+  DestroyTerminal,
   ListTerminalSessions,
+  GetTerminalState,
 } from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 
@@ -396,12 +602,18 @@ interface TerminalState {
   activeSessionId: string | null
   loading: boolean
   error: string | null
-  
+
   // Actions
   fetchSessions: () => Promise<void>
-  createSession: (id: string, worktreeId: string) => Promise<void>
-  closeSession: (id: string) => Promise<void>
+  createOrAttachSession: (id: string, worktreeId: string) => Promise<void>
+  detachSession: (id: string) => Promise<void>
+  destroySession: (id: string) => Promise<void>
   setActiveSession: (id: string | null) => void
+  updateSessionState: (id: string, state: SessionState) => void
+
+  // Event handling
+  subscribeToEvents: () => void
+  unsubscribeFromEvents: () => void
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -409,7 +621,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeSessionId: null,
   loading: false,
   error: null,
-  
+
   fetchSessions: async () => {
     try {
       const sessions = await ListTerminalSessions()
@@ -418,35 +630,80 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       set({ error: String(err) })
     }
   },
-  
-  createSession: async (id: string, worktreeId: string) => {
+
+  createOrAttachSession: async (id: string, worktreeId: string) => {
     set({ loading: true, error: null })
     try {
-      await CreateTerminal(id, worktreeId)
+      await CreateOrAttachTerminal(id, worktreeId)
       await get().fetchSessions()
       set({ activeSessionId: id, loading: false })
     } catch (err) {
       set({ error: String(err), loading: false })
     }
   },
-  
-  closeSession: async (id: string) => {
+
+  detachSession: async (id: string) => {
     try {
-      await CloseTerminal(id)
+      await DetachTerminal(id)
       await get().fetchSessions()
-      // 如果关闭的是当前活跃的，清除选中
+      // 如果断开的是当前活跃的，清除选中
       if (get().activeSessionId === id) {
         const remaining = get().sessions.filter(s => s.id !== id)
-        set({ 
-          activeSessionId: remaining.length > 0 ? remaining[0].id : null 
+        set({
+          activeSessionId: remaining.length > 0 ? remaining[0].id : null
         })
       }
     } catch (err) {
       set({ error: String(err) })
     }
   },
-  
+
+  destroySession: async (id: string) => {
+    try {
+      await DestroyTerminal(id)
+      await get().fetchSessions()
+      // 如果销毁的是当前活跃的，清除选中
+      if (get().activeSessionId === id) {
+        const remaining = get().sessions.filter(s => s.id !== id)
+        set({
+          activeSessionId: remaining.length > 0 ? remaining[0].id : null
+        })
+      }
+    } catch (err) {
+      set({ error: String(err) })
+    }
+  },
+
   setActiveSession: (id) => set({ activeSessionId: id }),
+
+  updateSessionState: (id: string, state: SessionState) => {
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sess.id === id ? { ...sess, state } : sess
+      ),
+    }))
+  },
+
+  subscribeToEvents: () => {
+    // 订阅统一事件协议
+    EventsOn(TERMINAL_EVENTS.STATE, (event: TerminalEvent) => {
+      get().updateSessionState(event.sessionId, event.state!)
+    })
+
+    EventsOn(TERMINAL_EVENTS.ERROR, (event: TerminalEvent) => {
+      set({ error: event.error })
+    })
+
+    EventsOn(TERMINAL_EVENTS.EXIT, (event: TerminalEvent) => {
+      get().updateSessionState(event.sessionId, 'exited')
+    })
+  },
+
+  unsubscribeFromEvents: () => {
+    EventsOff(TERMINAL_EVENTS.STATE)
+    EventsOff(TERMINAL_EVENTS.ERROR)
+    EventsOff(TERMINAL_EVENTS.EXIT)
+  },
 }))
 ```
 
@@ -465,18 +722,19 @@ import {
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useTerminalStore } from '../stores/terminalStore'
 import { useConfigStore } from '../stores/configStore'
+import { TerminalEvent, TERMINAL_EVENTS } from '../types/terminal'
 
 export function useTerminal(sessionId: string) {
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  
+
   const { config } = useConfigStore()
-  
+
   // 初始化终端
   useEffect(() => {
     if (!containerRef.current) return
-    
+
     // 创建终端实例
     const term = new Terminal({
       fontFamily: config?.terminal?.fontFamily || 'JetBrains Mono, monospace',
@@ -491,41 +749,43 @@ export function useTerminal(sessionId: string) {
       cursorStyle: 'block',
       allowTransparency: true,
     })
-    
+
     // 加载插件
     const fitAddon = new FitAddon()
     const webLinksAddon = new WebLinksAddon()
-    
+
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
     term.open(containerRef.current)
-    
+
     // 首次适配
     setTimeout(() => {
       fitAddon.fit()
       ResizeTerminal(sessionId, term.cols, term.rows)
     }, 0)
-    
+
     // 输入处理
     term.onData((data) => {
       SendTerminalInput(sessionId, data)
     })
-    
-    // 监听输出
-    EventsOn(`terminal-output-${sessionId}`, (output: string) => {
-      term.write(output)
+
+    // 监听统一输出事件（按 sessionId 路由）
+    EventsOn(TERMINAL_EVENTS.OUTPUT, (event: TerminalEvent) => {
+      if (event.sessionId === sessionId && event.data) {
+        term.write(event.data)
+      }
     })
-    
+
     terminalRef.current = term
     fitAddonRef.current = fitAddon
-    
-    // 清理
+
+    // 清理（仅取消订阅，不销毁会话）
     return () => {
-      EventsOff(`terminal-output-${sessionId}`)
+      EventsOff(TERMINAL_EVENTS.OUTPUT)
       term.dispose()
     }
   }, [sessionId])
-  
+
   // Resize 处理
   const handleResize = useCallback(() => {
     if (terminalRef.current && fitAddonRef.current) {
@@ -537,12 +797,12 @@ export function useTerminal(sessionId: string) {
       )
     }
   }, [sessionId])
-  
+
   // 聚焦
   const focus = useCallback(() => {
     terminalRef.current?.focus()
   }, [])
-  
+
   return {
     containerRef,
     terminal: terminalRef,
@@ -599,30 +859,40 @@ import { useWorktreeStore } from '../../stores/worktreeStore'
 
 export default function TerminalPane() {
   const { selectedId: worktreeId } = useWorktreeStore()
-  const { 
-    sessions, 
-    activeSessionId, 
-    createSession, 
+  const {
+    sessions,
+    activeSessionId,
+    createOrAttachSession,
+    detachSession,
+    destroySession,
     setActiveSession,
-    loading 
+    subscribeToEvents,
+    unsubscribeFromEvents,
+    loading
   } = useTerminalStore()
-  
+
+  // 订阅终端事件
+  useEffect(() => {
+    subscribeToEvents()
+    return () => unsubscribeFromEvents()
+  }, [])
+
   // 当选中 worktree 时，创建或激活对应的终端
   useEffect(() => {
     if (!worktreeId) return
-    
+
     // 查找该 worktree 的现有 session
     const existingSession = sessions.find(s => s.worktreeId === worktreeId)
-    
+
     if (existingSession) {
       setActiveSession(existingSession.id)
     } else {
       // 创建新 session
       const sessionId = `terminal-${Date.now()}`
-      createSession(sessionId, worktreeId)
+      createOrAttachSession(sessionId, worktreeId)
     }
   }, [worktreeId])
-  
+
   if (!activeSessionId) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500">
@@ -630,7 +900,7 @@ export default function TerminalPane() {
       </div>
     )
   }
-  
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500">
@@ -638,7 +908,9 @@ export default function TerminalPane() {
       </div>
     )
   }
-  
+
+  const activeSession = sessions.find(s => s.id === activeSessionId)
+
   return (
     <div className="h-full flex flex-col">
       {/* Tab 栏 */}
@@ -647,31 +919,48 @@ export default function TerminalPane() {
           <button
             key={session.id}
             className={`
-              px-4 py-2 text-sm border-b-2 transition-colors
-              ${activeSessionId === session.id 
-                ? 'border-blue-500 text-white' 
+              px-4 py-2 text-sm border-b-2 transition-colors flex items-center gap-2
+              ${activeSessionId === session.id
+                ? 'border-blue-500 text-white'
                 : 'border-transparent text-gray-400 hover:text-white'}
             `}
             onClick={() => setActiveSession(session.id)}
           >
-            {session.worktreeId}
+            <span>{session.worktreeId}</span>
+            {/* 状态指示器 */}
+            <span className={`
+              w-2 h-2 rounded-full
+              ${session.state === 'running' ? 'bg-green-500' : ''}
+              ${session.state === 'detached' ? 'bg-yellow-500' : ''}
+              ${session.state === 'exited' ? 'bg-gray-500' : ''}
+            `} />
+            {/* 关闭按钮（detach） */}
+            <span
+              className="ml-1 text-gray-500 hover:text-white"
+              onClick={(e) => {
+                e.stopPropagation()
+                detachSession(session.id)
+              }}
+            >
+              ×
+            </span>
           </button>
         ))}
-        
+
         {/* 新建 Tab 按钮 */}
         {worktreeId && (
           <button
             className="px-3 py-2 text-gray-400 hover:text-white"
             onClick={() => {
               const sessionId = `terminal-${Date.now()}`
-              createSession(sessionId, worktreeId)
+              createOrAttachSession(sessionId, worktreeId)
             }}
           >
             +
           </button>
         )}
       </div>
-      
+
       {/* 终端区域 */}
       <div className="flex-1 overflow-hidden">
         {sessions.map(session => (
@@ -683,6 +972,14 @@ export default function TerminalPane() {
           </div>
         ))}
       </div>
+
+      {/* 状态栏 */}
+      {activeSession && (
+        <div className="px-4 py-1 text-xs text-gray-500 border-t border-gray-700 bg-gray-800 flex justify-between">
+          <span>State: {activeSession.state}</span>
+          <span>CWD: {activeSession.cwd}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -912,50 +1209,13 @@ require (
 
 ---
 
-## 8. 已知限制
-
-1. **Windows 不支持 tmux**：Windows 用户将直接使用 shell
-2. **无持久化**：应用重启后终端会话丢失（Phase 3 解决）
-3. **单终端**：每个 worktree 暂时只支持一个终端（Phase 3 支持多 Tab）
-
----
-
-## 9. 方案对比（当前 vs 推荐）
-
-### 9.1 架构层面对比
-
-| 维度 | 当前方案（tmux+PTY直连） | 推荐方案（tmux + SessionBridge） |
-|------|---------------------------|----------------------------------|
-| 会话模型 | `Session` 同时承载进程、PTY、UI关系 | 分层：`TmuxSession` / `BridgeAttach` / `UITab` |
-| 关闭 Tab 语义 | `Close` 常等价 kill | **Close=Detach**，Destroy 才 kill（保活优先） |
-| 事件协议 | `terminal-output-${id}` 动态事件名 | 统一事件：`terminal:output/state/error/exit` |
-| 重连能力 | 弱（前端重建可能丢上下文） | 强（UI可重连既有 tmux 会话） |
-| 并发安全 | `CloseAll -> Close` 有锁重入风险 | 统一 teardown 路径，规避死锁 |
-| 可观测性 | 错误以字符串为主 | 错误码 + 状态机 + 可追踪事件 |
-| 扩展性（Phase 3+） | 一般 | 高（多窗口/多订阅/恢复自然） |
-
-### 9.2 API 语义对比
-
-| 能力 | 当前文档接口 | 推荐接口语义 |
-|------|--------------|-------------|
-| 创建 | `CreateSession` | `CreateOrAttachSession` |
-| 输入 | `SendInput` | `SendInput`（不变） |
-| Resize | `Resize` | `Resize`（不变） |
-| 关闭 UI | `Close` | `DetachSession` |
-| 销毁会话 | `Close` 内隐含 kill | `DestroySession`（显式） |
-| 列表 | `ListSessions` | `ListSessions` + `ListDetachedSessions`（可选） |
-
----
-
-## 10. 简化数据流图
-
-### 10.1 当前方案（直连）
+## 10. 数据流图（统一事件协议）
 
 ```text
-[React xterm]
+[React xterm tab]
    │ onData
    ▼
-[Wails IPC: SendInput(sessionId,data)]
+[Wails IPC: SendInput(sessionId, data)]
    ▼
 [terminal.Manager]
    ▼
@@ -964,29 +1224,9 @@ require (
    ▼
 [readOutput goroutine]
    ▼
-[Wails EventsEmit("terminal-output-${id}", chunk)]
+[EventsEmit("terminal:output", {sessionId, chunk, ts})]
    ▼
-[React EventsOn -> term.write()]
-```
-
-### 10.2 推荐方案（SessionBridge）
-
-```text
-[React xterm tab]
-   │ onData
-   ▼
-[IPC: SendInput(sessionId,data)]
-   ▼
-[SessionBridge]  (I/O路由, 状态管理, 重连)
-   ▼
-[tmux session]  (长期存活)
-   │ output stream
-   ▼
-[SessionBridge normalize event]
-   ▼
-[EventsEmit("terminal:output", {sessionId,chunk,ts})]
-   ▼
-[React route by sessionId -> term.write()]
+[React EventsOn -> 按 sessionId 路由 -> term.write()]
 ```
 
 ---
@@ -994,20 +1234,30 @@ require (
 ## 11. 生命周期流（保活优先）
 
 ```text
-CreateOrAttach
-  └─> running
-       ├─ UI tab close -> detached (tmux仍在)
-       ├─ UI reopen    -> running (reattach)
-       ├─ process exit -> exited
-       └─ user destroy -> destroyed (kill tmux)
+CreateOrAttachSession
+  └─> creating -> running
+       ├─ UI tab close -> DetachSession -> detached (tmux仍在)
+       ├─ UI reopen    -> CreateOrAttach -> running (reattach)
+       ├─ process exit -> exited (自然结束)
+       └─ user destroy -> DestroySession -> destroyed (kill tmux)
 ```
 
 ---
 
-## 12. 设计建议（落地优先）
+## 12. 设计要点总结
 
-1. **默认保活语义**：关闭 Tab 仅 detach，不 kill tmux  
-2. **统一事件协议**：避免动态事件名膨胀，前端按 `sessionId` 路由  
-3. **统一 teardown**：避免 `CloseAll` 持锁调用 `Close` 造成死锁  
-4. **状态驱动 UI**：tab 状态由 `terminal:state` 事件驱动，不靠前端猜测  
-5. **先聚焦终端 MVP**：Diff 弹出页在 Phase 2 仅保留接口占位，不进入实现
+| 要点 | 说明 |
+|------|------|
+| **保活语义** | 关闭 Tab 仅 `DetachSession`，tmux 会话保活；显式 `DestroySession` 才 kill |
+| **统一事件协议** | `terminal:output/state/error/exit`，前端按 `sessionId` 路由，避免动态事件名膨胀 |
+| **状态机** | `Session.State` 字段驱动 UI，通过 `terminal:state` 事件同步 |
+| **死锁规避** | `CloseAll` 先收集 ID 再逐个销毁，不持锁调用 `DestroySession` |
+| **重连能力** | tmux 会话可被 `CreateOrAttachSession` 重新附加 |
+
+---
+
+## 13. 已知限制
+
+1. **Windows 不支持 tmux**：Windows 用户将直接使用 shell（无保活）
+2. **无持久化**：应用重启后终端会话丢失（Phase 3 解决）
+3. **单终端**：每个 worktree 暂时只支持一个终端（Phase 3 支持多 Tab）
