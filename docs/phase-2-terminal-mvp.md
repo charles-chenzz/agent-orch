@@ -7,57 +7,86 @@
 
 ---
 
+## 0. 实现进度
+
+> **最后更新**：2026-03-16
+
+| 模块 | 完成度 | 状态 |
+|------|--------|------|
+| Go 后端 - PTY 管理 | 100% | ✅ 完成 |
+| Go 后端 - tmux 集成 | 80% | ✅ 核心完成 |
+| 前端 - xterm.js 集成 | 0% | ❌ 未开始 |
+| 前端 - 终端组件 | 0% | ❌ 未开始 |
+| 会话状态与协议 | 100% | ✅ 完成 |
+| **整体进度** | **~45%** | 🚧 进行中 |
+
+### 已完成文件
+
+- `internal/terminal/types.go` - 数据结构定义
+- `internal/terminal/manager.go` - PTY 管理器实现
+- `app.go` - Wails API 绑定
+
+### 待完成
+
+- [ ] 安装 xterm.js 依赖
+- [ ] 创建 `frontend/src/stores/terminalStore.ts`
+- [ ] 创建 `frontend/src/hooks/useTerminal.ts`
+- [ ] 创建 `frontend/src/components/Terminal/Terminal.tsx`
+- [ ] 更新 `TerminalPane.tsx` 替换 Mock UI
+
+---
+
 ## 1. Feature List
 
-### 1.1 Go 后端 - PTY 管理
+### 1.1 Go 后端 - PTY 管理 ✅
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F2.1 | terminal.Manager 结构（含 sessions 状态管理） | P0 |
-| F2.2 | CreateOrAttachSession(id, cwd string) - 创建或复用 tmux session | P0 |
-| F2.3 | SendInput(id, data string) | P0 |
-| F2.4 | Resize(id, cols, rows) | P0 |
-| F2.5 | DetachSession(id string) - 仅断开 UI 连接，tmux 保活 | P0 |
-| F2.5a | DestroySession(id string) - 彻底销毁 tmux session | P0 |
-| F2.6 | 统一事件协议（terminal:output/state/error/exit） | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F2.1 | terminal.Manager 结构（含 sessions 状态管理） | P0 | ✅ |
+| F2.2 | CreateOrAttachSession(id, cwd string) - 创建或复用 tmux session | P0 | ✅ |
+| F2.3 | SendInput(id, data string) | P0 | ✅ |
+| F2.4 | Resize(id, cols, rows) | P0 | ✅ |
+| F2.5 | DetachSession(id string) - 仅断开 UI 连接，tmux 保活 | P0 | ✅ |
+| F2.5a | DestroySession(id string) - 彻底销毁 tmux session | P0 | ✅ |
+| F2.6 | 统一事件协议（terminal:output/state/error/exit） | P0 | ✅ |
 
-### 1.2 Go 后端 - tmux 集成
+### 1.2 Go 后端 - tmux 集成 ✅
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F2.7 | tmux 可用性检测 | P0 |
-| F2.8 | tmux session 创建/附加（-A 参数） | P0 |
-| F2.9 | tmux session 列表（含 detached 状态） | P1 |
-| F2.10 | tmux session 销毁（显式 kill-session） | P0 |
-| F2.20 | tmux 保活策略（UI 关闭仅 detach，不 kill） | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F2.7 | tmux 可用性检测 | P0 | ✅ |
+| F2.8 | tmux session 创建/附加（-A 参数） | P0 | ✅ |
+| F2.9 | tmux session 列表（含 detached 状态） | P1 | ⚠️ 仅内存 |
+| F2.10 | tmux session 销毁（显式 kill-session） | P0 | ✅ |
+| F2.20 | tmux 保活策略（UI 关闭仅 detach，不 kill） | P0 | ✅ |
 
-### 1.3 前端 - xterm.js 集成
+### 1.3 前端 - xterm.js 集成 ❌
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F2.11 | xterm.js 初始化 | P0 |
-| F2.12 | FitAddon 集成 | P0 |
-| F2.13 | 输入事件处理 | P0 |
-| F2.14 | 输出渲染（统一事件路由） | P0 |
-| F2.15 | 基础主题配置 | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F2.11 | xterm.js 初始化 | P0 | ❌ |
+| F2.12 | FitAddon 集成 | P0 | ❌ |
+| F2.13 | 输入事件处理 | P0 | ❌ |
+| F2.14 | 输出渲染（统一事件路由） | P0 | ❌ |
+| F2.15 | 基础主题配置 | P0 | ❌ |
 
-### 1.4 前端 - 终端组件
+### 1.4 前端 - 终端组件 ❌
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F2.16 | Terminal.tsx 组件 | P0 |
-| F2.17 | useTerminal hook | P0 |
-| F2.18 | terminalStore（含 session 状态） | P0 |
-| F2.19 | 单终端 Tab UI | P0 |
-| F2.21 | 会话重连与状态同步 UI | P1 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F2.16 | Terminal.tsx 组件 | P0 | ❌ Mock UI |
+| F2.17 | useTerminal hook | P0 | ❌ |
+| F2.18 | terminalStore（含 session 状态） | P0 | ❌ |
+| F2.19 | 单终端 Tab UI | P0 | ❌ Mock UI |
+| F2.21 | 会话重连与状态同步 UI | P1 | ❌ |
 
-### 1.5 会话状态与协议
+### 1.5 会话状态与协议 ✅
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F2.22 | Session.State 字段 + 状态机（creating/running/detached/exited/destroyed） | P0 |
-| F2.23 | StateChange 事件发送（terminal:state） | P0 |
-| F2.24 | 统一事件协议（terminal:output/state/error/exit） | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F2.22 | Session.State 字段 + 状态机（creating/running/detached/exited/destroyed） | P0 | ✅ |
+| F2.23 | StateChange 事件发送（terminal:state） | P0 | ✅ |
+| F2.24 | 统一事件协议（terminal:output/state/error/exit） | P0 | ✅ |
 
 ---
 
