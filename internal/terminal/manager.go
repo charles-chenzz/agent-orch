@@ -16,6 +16,8 @@ import (
 const tmuxSessionPrefix = "agent-orch-"
 const tmuxListFormat = "#{session_name}\t#{session_attached}\t#{session_created}\t#{session_activity}\t#{session_path}"
 
+var execCommand = exec.Command
+
 // NewManager 创建终端管理器
 func NewManager(ctx context.Context) *Manager {
 	tmuxPath, err := exec.LookPath("tmux")
@@ -362,7 +364,7 @@ func (m *Manager) listTmuxSessions() ([]SessionInfo, error) {
 		return nil, nil
 	}
 
-	output, err := exec.Command(m.tmuxPath, "list-sessions", "-F", tmuxListFormat).CombinedOutput()
+	output, err := execCommand(m.tmuxPath, "list-sessions", "-F", tmuxListFormat).CombinedOutput()
 	if err != nil {
 		lower := strings.ToLower(string(output))
 		if strings.Contains(lower, "no server running") || strings.Contains(lower, "failed to connect") || strings.Contains(lower, "no sessions") {
