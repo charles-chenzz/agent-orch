@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+const tmuxSessionPrefix = "agent-orch-"
+const tmuxListFormat = "#{session_name}\t#{session_attached}\t#{session_created}\t#{session_activity}\t#{session_path}"
 
 // NewManager 创建终端管理器
 func NewManager(ctx context.Context) *Manager {
@@ -55,7 +60,7 @@ func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
 
 	if m.hasTmux {
 		// 使用 tmux（-A 如果不存在则创建）
-		tmuxSession = fmt.Sprintf("agent-orch-%s", id)
+		tmuxSession = fmt.Sprintf("%s%s", tmuxSessionPrefix, id)
 		cmd = exec.Command(m.tmuxPath, "new-session",
 			"-A",              // 如果不存在则创建
 			"-s", tmuxSession, // session 名称
@@ -301,9 +306,8 @@ func (m *Manager) CloseAll() {
 // ListSessions 列出所有活跃会话
 func (m *Manager) ListSessions() []SessionInfo {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var infos []SessionInfo
+	infos := make([]SessionInfo, 0, len(m.sessions))
+	seen := make(map[string]struct{}, len(m.sessions))
 	for _, session := range m.sessions {
 		infos = append(infos, SessionInfo{
 			ID:         session.ID,
@@ -313,7 +317,26 @@ func (m *Manager) ListSessions() []SessionInfo {
 			CreatedAt:  session.CreatedAt,
 			LastActive: session.LastActive,
 		})
+		seen[session.ID] = struct{}{}
 	}
+	m.mu.RUnlock()
+
+	if !m.hasTmux {
+		return infos
+	}
+
+	tmuxInfos, err := m.listTmuxSessions()
+	if err != nil {
+		return infos
+	}
+	for _, info := range tmuxInfos {
+		if _, ok := seen[info.ID]; ok {
+			continue
+		}
+		infos = append(infos, info)
+		seen[info.ID] = struct{}{}
+	}
+
 	return infos
 }
 
@@ -332,4 +355,75 @@ func (m *Manager) GetSessionState(id string) (SessionState, error) {
 // HasTmux 返回 tmux 是否可用
 func (m *Manager) HasTmux() bool {
 	return m.hasTmux
+}
+
+func (m *Manager) listTmuxSessions() ([]SessionInfo, error) {
+	if !m.hasTmux {
+		return nil, nil
+	}
+
+	output, err := exec.Command(m.tmuxPath, "list-sessions", "-F", tmuxListFormat).CombinedOutput()
+	if err != nil {
+		lower := strings.ToLower(string(output))
+		if strings.Contains(lower, "no server running") || strings.Contains(lower, "failed to connect") || strings.Contains(lower, "no sessions") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list tmux sessions: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	infos := make([]SessionInfo, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "\t")
+		if len(parts) < 5 {
+			continue
+		}
+
+		name := parts[0]
+		id, ok := parseTmuxSessionID(name)
+		if !ok {
+			continue
+		}
+
+		attached := parts[1] == "1"
+		createdAt := parseUnixSeconds(parts[2])
+		lastActive := parseUnixSeconds(parts[3])
+		cwd := parts[4]
+
+		state := StateDetached
+		if attached {
+			state = StateRunning
+		}
+
+		infos = append(infos, SessionInfo{
+			ID:         id,
+			WorktreeID: "",
+			CWD:        cwd,
+			State:      string(state),
+			CreatedAt:  createdAt,
+			LastActive: lastActive,
+		})
+	}
+
+	return infos, nil
+}
+
+func parseTmuxSessionID(name string) (string, bool) {
+	if !strings.HasPrefix(name, tmuxSessionPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(name, tmuxSessionPrefix), true
+}
+
+func parseUnixSeconds(value string) time.Time {
+	secs, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || secs <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(secs, 0)
 }

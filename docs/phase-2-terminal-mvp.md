@@ -56,7 +56,7 @@
 |---------|------|--------|------|
 | F2.7 | tmux 可用性检测 | P0 | ✅ |
 | F2.8 | tmux session 创建/附加（-A 参数） | P0 | ✅ |
-| F2.9 | tmux session 列表（含 detached 状态） | P1 | ⚠️ 仅内存 |
+| F2.9 | tmux session 列表（含 detached 状态） | P1 | ✅ |
 | F2.10 | tmux session 销毁（显式 kill-session） | P0 | ✅ |
 | F2.20 | tmux 保活策略（UI 关闭仅 detach，不 kill） | P0 | ✅ |
 
