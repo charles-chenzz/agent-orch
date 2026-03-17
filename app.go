@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"agent-orch/internal/terminal"
 	"agent-orch/internal/worktree"
 )
 
@@ -11,6 +12,7 @@ import (
 type App struct {
 	ctx       context.Context
 	worktree  *worktree.Manager
+	terminal  *terminal.Manager
 	repoPath  string
 }
 
@@ -25,6 +27,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	// TODO: 从配置获取仓库路径，暂时使用当前目录
 	a.repoPath = "."
+
+	// 初始化终端管理器
+	a.terminal = terminal.NewManager(ctx)
 }
 
 // Greet returns a greeting for the given name
@@ -88,4 +93,68 @@ func (a *App) DeleteWorktree(name string, force bool) error {
 // GetRepoPath 返回当前仓库路径
 func (a *App) GetRepoPath() string {
 	return a.repoPath
+}
+
+// === Terminal API ===
+
+// CreateOrAttachTerminal 创建或附加到终端
+func (a *App) CreateOrAttachTerminal(id, worktreeId string) error {
+	// 获取 worktree 路径
+	worktrees, err := a.worktree.List()
+	if err != nil {
+		return err
+	}
+
+	var cwd string
+	for _, wt := range worktrees {
+		if wt.ID == worktreeId || wt.Name == worktreeId {
+			cwd = wt.Path
+			break
+		}
+	}
+
+	if cwd == "" {
+		return fmt.Errorf("worktree not found: %s", worktreeId)
+	}
+
+	return a.terminal.CreateOrAttachSession(id, worktreeId, cwd)
+}
+
+// SendTerminalInput 发送终端输入
+func (a *App) SendTerminalInput(id, data string) error {
+	return a.terminal.SendInput(id, data)
+}
+
+// ResizeTerminal 调整终端大小
+func (a *App) ResizeTerminal(id string, cols, rows uint16) error {
+	return a.terminal.Resize(id, cols, rows)
+}
+
+// DetachTerminal 断开终端（保活，可重连）
+func (a *App) DetachTerminal(id string) error {
+	return a.terminal.DetachSession(id)
+}
+
+// DestroyTerminal 彻底销毁终端
+func (a *App) DestroyTerminal(id string) error {
+	return a.terminal.DestroySession(id)
+}
+
+// ListTerminalSessions 列出终端会话
+func (a *App) ListTerminalSessions() []terminal.SessionInfo {
+	return a.terminal.ListSessions()
+}
+
+// GetTerminalState 获取终端状态
+func (a *App) GetTerminalState(id string) (string, error) {
+	state, err := a.terminal.GetSessionState(id)
+	if err != nil {
+		return "", err
+	}
+	return string(state), nil
+}
+
+// HasTmux 返回 tmux 是否可用
+func (a *App) HasTmux() bool {
+	return a.terminal.HasTmux()
 }
