@@ -36,13 +36,17 @@ func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 检查是否已存在 detached 的会话
+	// 检查是否已存在的会话
 	if session, exists := m.sessions[id]; exists {
 		if session.State == StateDetached {
 			// 重新附加
 			return m.attachSession(session)
 		}
-		return fmt.Errorf("session already running: %s", id)
+		// Session already running - just return success (reattach silently)
+		if session.State == StateRunning {
+			return nil
+		}
+		return fmt.Errorf("session already exists but in unexpected state: %s (state: %s)", id, session.State)
 	}
 
 	// 创建新会话
@@ -60,23 +64,26 @@ func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
 	var cmd *exec.Cmd
 	var tmuxSession string
 
-	if m.hasTmux {
-		// 使用 tmux（-A 如果不存在则创建）
-		tmuxSession = fmt.Sprintf("%s%s", tmuxSessionPrefix, id)
-		cmd = exec.Command(m.tmuxPath, "new-session",
-			"-A",              // 如果不存在则创建
-			"-s", tmuxSession, // session 名称
-			"-c", cwd, // 工作目录
-		)
-	} else {
-		// 直接使用 shell
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/bash"
-		}
-		cmd = exec.Command(shell)
-		cmd.Dir = cwd
-	}
+    if m.hasTmux {
+        // 使用 tmux（-A 如果不存在则创建）
+        tmuxSession = fmt.Sprintf("%s%s", tmuxSessionPrefix, id)
+        cmd = exec.Command(m.tmuxPath, "new-session",
+            "-A",              // 如果不存在则创建
+            "-s", tmuxSession, // session 名称
+            "-c", cwd, // 工作目录
+            "-e", "TERM=xterm-256color", // 设置 TERM 环境变量
+        )
+    } else {
+        // 直接使用 shell
+        shell := os.Getenv("SHELL")
+        if shell == "" {
+            shell = "/bin/bash"
+        }
+        cmd = exec.Command(shell)
+        cmd.Dir = cwd
+        // 设置必要的环境变量
+        cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+    }
 
 	// 启动 PTY
 	var err error

@@ -30,6 +30,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// 初始化终端管理器
 	a.terminal = terminal.NewManager(ctx)
+
+	// 初始化 worktree 管理器（使用当前目录）
+	if mgr, err := worktree.NewManager("."); err == nil {
+		a.worktree = mgr
+	}
 }
 
 // Greet returns a greeting for the given name
@@ -99,6 +104,11 @@ func (a *App) GetRepoPath() string {
 
 // CreateOrAttachTerminal 创建或附加到终端
 func (a *App) CreateOrAttachTerminal(id, worktreeId string) error {
+	// 检查 worktree manager 是否初始化
+	if a.worktree == nil {
+		return fmt.Errorf("worktree manager not initialized")
+	}
+
 	// 获取 worktree 路径
 	worktrees, err := a.worktree.List()
 	if err != nil {

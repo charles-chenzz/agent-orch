@@ -5,6 +5,7 @@ go 1.22.0
 toolchain go1.23.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/go-git/go-git/v5 v5.13.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.11.0
@@ -18,7 +19,6 @@ require (
 	github.com/ProtonMail/go-crypto v1.1.5 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.3.7 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.6 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
