@@ -1290,3 +1290,325 @@ CreateOrAttachSession
 1. **Windows 不支持 tmux**：Windows 用户将直接使用 shell（无保活）
 2. **无持久化**：应用重启后终端会话丢失（Phase 3 解决）
 3. **单终端**：每个 worktree 暂时只支持一个终端（Phase 3 支持多 Tab）
+---
+
+## 14. 前端测试方案
+
+### 14.1 测试工具配置
+
+```bash
+# 安装依赖
+npm install -D vitest @testing-library/react jsdom @vitest/coverage-v8
+```
+
+```typescript
+// frontend/vitest.config.ts
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      include: ['src/stores/**', 'src/hooks/**', 'src/types/**'],
+    },
+  },
+})
+```
+
+```typescript
+// frontend/src/test/setup.ts
+import { vi } from 'vitest'
+
+// Mock Wails runtime
+globalThis.EventsOn = vi.fn()
+globalThis.EventsOff = vi.fn()
+globalThis.EventsOnce = vi.fn()
+globalThis.EventsEmit = vi.fn()
+```
+
+### 14.2 可自动化测试范围
+
+| 测试类型 | 测试内容 | 优先级 | 自动化程度 |
+|---------|---------|--------|-----------|
+| **Store 单元测试** | 状态变更、action 逻辑 | P0 | 完全自动化 |
+| **类型验证** | 类型定义正确性 | P0 | 完全自动化 |
+| **事件协议测试** | 事件 payload 格式验证 | P0 | 完全自动化 |
+| **Hook 逻辑测试** | useTerminal 的 resize、focus | P1 | 部分自动化 |
+| **组件渲染测试** | 条件渲染逻辑 | P1 | 部分自动化 |
+
+### 14.3 Store 单元测试
+
+```typescript
+// frontend/src/stores/__tests__/terminalStore.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useTerminalStore } from '../terminalStore'
+import { TERMINAL_EVENTS } from '../../types/terminal'
+
+// Mock Wails bindings
+vi.mock('../../../wailsjs/go/main/App', () => ({
+  CreateOrAttachTerminal: vi.fn().mockResolvedValue(undefined),
+  DetachTerminal: vi.fn().mockResolvedValue(undefined),
+  DestroyTerminal: vi.fn().mockResolvedValue(undefined),
+  ListTerminalSessions: vi.fn().mockResolvedValue([
+    { id: 'session-1', worktreeId: 'wt-1', state: 'running' }
+  ]),
+}))
+
+vi.mock('../../../wailsjs/runtime/runtime', () => ({
+  EventsOn: vi.fn(),
+  EventsOff: vi.fn(),
+}))
+
+describe('terminalStore', () => {
+  beforeEach(() => {
+    useTerminalStore.setState({
+      sessions: [],
+      activeSessionId: null,
+      loading: false,
+      error: null,
+    })
+  })
+
+  describe('createOrAttachSession', () => {
+    it('should create session and set as active', async () => {
+      const { createOrAttachSession } = useTerminalStore.getState()
+      
+      await createOrAttachSession('session-1', 'wt-1')
+      
+      const state = useTerminalStore.getState()
+      expect(state.activeSessionId).toBe('session-1')
+      expect(state.loading).toBe(false)
+    })
+
+    it('should set loading state during creation', async () => {
+      const { createOrAttachSession } = useTerminalStore.getState()
+      
+      const promise = createOrAttachSession('session-1', 'wt-1')
+      
+      // Check loading is true during the operation
+      expect(useTerminalStore.getState().loading).toBe(true)
+      
+      await promise
+      
+      expect(useTerminalStore.getState().loading).toBe(false)
+    })
+  })
+
+  describe('updateSessionState', () => {
+    it('should update session state', () => {
+      useTerminalStore.setState({
+        sessions: [{ id: 'session-1', state: 'running' } as any],
+      })
+      
+      const { updateSessionState } = useTerminalStore.getState()
+      updateSessionState('session-1', 'detached')
+      
+      const state = useTerminalStore.getState()
+      expect(state.sessions[0].state).toBe('detached')
+    })
+
+    it('should not affect other sessions', () => {
+      useTerminalStore.setState({
+        sessions: [
+          { id: 'session-1', state: 'running' } as any,
+          { id: 'session-2', state: 'running' } as any,
+        ],
+      })
+      
+      const { updateSessionState } = useTerminalStore.getState()
+      updateSessionState('session-1', 'detached')
+      
+      const state = useTerminalStore.getState()
+      expect(state.sessions[0].state).toBe('detached')
+      expect(state.sessions[1].state).toBe('running')
+    })
+  })
+
+  describe('detachSession', () => {
+    it('should clear active session if detaching current', async () => {
+      useTerminalStore.setState({
+        sessions: [{ id: 'session-1', state: 'running' } as any],
+        activeSessionId: 'session-1',
+      })
+      
+      const { detachSession } = useTerminalStore.getState()
+      await detachSession('session-1')
+      
+      expect(useTerminalStore.getState().activeSessionId).toBeNull()
+    })
+  })
+
+  describe('setActiveSession', () => {
+    it('should update active session id', () => {
+      const { setActiveSession } = useTerminalStore.getState()
+      
+      setActiveSession('session-2')
+      
+      expect(useTerminalStore.getState().activeSessionId).toBe('session-2')
+    })
+  })
+})
+```
+
+### 14.4 类型/事件协议测试
+
+```typescript
+// frontend/src/types/__tests__/terminal.test.ts
+import { describe, it, expect } from 'vitest'
+import { TERMINAL_EVENTS, type TerminalEvent, type SessionState } from '../terminal'
+
+describe('Terminal types', () => {
+  describe('TERMINAL_EVENTS', () => {
+    it('should have correct event names', () => {
+      expect(TERMINAL_EVENTS.OUTPUT).toBe('terminal:output')
+      expect(TERMINAL_EVENTS.STATE).toBe('terminal:state')
+      expect(TERMINAL_EVENTS.ERROR).toBe('terminal:error')
+      expect(TERMINAL_EVENTS.EXIT).toBe('terminal:exit')
+    })
+
+    it('should be readonly', () => {
+      // TypeScript compile-time check - this ensures the object is const
+      const events = TERMINAL_EVENTS
+      expect(Object.keys(events)).toHaveLength(4)
+    })
+  })
+
+  describe('TerminalEvent', () => {
+    it('should validate output event payload', () => {
+      const event: TerminalEvent = {
+        sessionId: 'session-1',
+        type: 'output',
+        data: 'hello',
+        ts: Date.now(),
+      }
+      
+      expect(event.sessionId).toBeDefined()
+      expect(event.type).toBe('output')
+      expect(event.data).toBe('hello')
+      expect(event.ts).toBeGreaterThan(0)
+    })
+
+    it('should validate state event payload', () => {
+      const event: TerminalEvent = {
+        sessionId: 'session-1',
+        type: 'state',
+        state: 'running',
+        ts: Date.now(),
+      }
+      
+      expect(event.type).toBe('state')
+      expect(event.state).toBe('running')
+    })
+
+    it('should validate error event payload', () => {
+      const event: TerminalEvent = {
+        sessionId: 'session-1',
+        type: 'error',
+        error: 'Connection failed',
+        ts: Date.now(),
+      }
+      
+      expect(event.type).toBe('error')
+      expect(event.error).toBe('Connection failed')
+    })
+  })
+
+  describe('SessionState', () => {
+    it('should accept all valid states', () => {
+      const validStates: SessionState[] = [
+        'creating', 'running', 'detached', 'exited', 'destroyed'
+      ]
+      
+      validStates.forEach(state => {
+        expect(['creating', 'running', 'detached', 'exited', 'destroyed']).toContain(state)
+      })
+    })
+  })
+})
+```
+
+### 14.5 Hook 测试
+
+```typescript
+// frontend/src/hooks/__tests__/useTerminal.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
+import { useTerminal } from '../useTerminal'
+
+// Mock dependencies
+vi.mock('../../../wailsjs/go/main/App', () => ({
+  SendTerminalInput: vi.fn().mockResolvedValue(undefined),
+  ResizeTerminal: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../../../wailsjs/runtime/runtime', () => ({
+  EventsOn: vi.fn(),
+  EventsOff: vi.fn(),
+}))
+
+vi.mock('../../stores/configStore', () => ({
+  useConfigStore: () => ({
+    config: { terminal: { fontFamily: 'JetBrains Mono', fontSize: 14 } },
+  }),
+}))
+
+describe('useTerminal', () => {
+  it('should return containerRef and handlers', () => {
+    const { result } = renderHook(() => useTerminal('session-1'))
+    
+    expect(result.current.containerRef).toBeDefined()
+    expect(result.current.handleResize).toBeDefined()
+    expect(result.current.focus).toBeDefined()
+  })
+
+  it('should call focus without error', () => {
+    const { result } = renderHook(() => useTerminal('session-1'))
+    
+    expect(() => result.current.focus()).not.toThrow()
+  })
+
+  it('should call handleResize without error', () => {
+    const { result } = renderHook(() => useTerminal('session-1'))
+    
+    expect(() => result.current.handleResize()).not.toThrow()
+  })
+})
+```
+
+### 14.6 测试命令
+
+```json
+// frontend/package.json
+{
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  }
+}
+```
+
+### 14.7 测试覆盖目标
+
+| 模块 | 目标覆盖率 | 当前状态 |
+|------|-----------|---------|
+| terminalStore | 80% | 待实现 |
+| types/terminal | 90% | 待实现 |
+| useTerminal hook | 60% | 待实现 |
+
+### 14.8 不适合自动化的测试
+
+以下内容需要手动测试或集成测试环境：
+
+| 内容 | 原因 | 替代方案 |
+|------|------|---------|
+| xterm.js 实际渲染 | 需要 DOM + Canvas | 手动测试 |
+| PTY I/O 流程 | 需要真实进程 | Go 集成测试 |
+| TUI 兼容性 | 需要 vim/htop 等应用 | 手动测试 |
+| 终端输出渲染 | 需要真实终端 | 手动测试 |
+

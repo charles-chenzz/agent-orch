@@ -769,3 +769,301 @@ const handleResize = useCallback(() => {
 | Bug 修复 | 2 天 |
 | 文档和发布 | 1 天 |
 | **总计** | **10 天 (2 周)** |
+---
+
+## 11. 前端测试方案
+
+### 11.1 测试工具配置
+
+与 Phase 2 共用测试配置，详见 Phase 2 文档 §14.1。
+
+### 11.2 Phase 3 可自动化测试范围
+
+| 测试类型 | 测试内容 | 优先级 | 说明 |
+|---------|---------|--------|------|
+| **会话持久化测试** | SessionRecord CRUD | P0 | Go 单元测试 |
+| **Tab 切换逻辑** | 组件渲染/隐藏策略 | P1 | 组件测试 |
+| **Resize 防抖** | debounce 函数逻辑 | P1 | 单元测试 |
+| **焦点恢复** | Tab 切换后 focus 调用 | P2 | 组件测试 |
+
+### 11.3 会话持久化测试 (Go)
+
+```go
+// internal/terminal/session_test.go
+package terminal
+
+import (
+    "testing"
+    "path/filepath"
+    
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+)
+
+func setupTestDB(t *testing.T) *gorm.DB {
+    tmpDir := t.TempDir()
+    dbPath := filepath.Join(tmpDir, "test.db")
+    
+    db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+    require.NoError(t, err)
+    
+    db.AutoMigrate(&SessionRecord{})
+    
+    return db
+}
+
+func TestSessionRecord_CRUD(t *testing.T) {
+    db := setupTestDB(t)
+    
+    // Create
+    record := SessionRecord{
+        ID:          "session-1",
+        WorktreeID:  "wt-1",
+        CWD:         "/path/to/worktree",
+        TmuxSession: "agent-orch-session-1",
+        Cols:        120,
+        Rows:        40,
+        Active:      true,
+    }
+    
+    result := db.Create(&record)
+    assert.NoError(t, result.Error)
+    assert.NotZero(t, record.ID)
+    
+    // Read
+    var found SessionRecord
+    result = db.First(&found, "id = ?", "session-1")
+    assert.NoError(t, result.Error)
+    assert.Equal(t, "wt-1", found.WorktreeID)
+    assert.Equal(t, uint16(120), found.Cols)
+    
+    // Update
+    found.Active = false
+    result = db.Save(&found)
+    assert.NoError(t, result.Error)
+    
+    var updated SessionRecord
+    db.First(&updated, "id = ?", "session-1")
+    assert.False(t, updated.Active)
+    
+    // Delete
+    result = db.Delete(&found)
+    assert.NoError(t, result.Error)
+    
+    var count int64
+    db.Model(&SessionRecord{}).Count(&count)
+    assert.Equal(t, int64(0), count)
+}
+
+func TestSessionRecord_QueryByActive(t *testing.T) {
+    db := setupTestDB(t)
+    
+    // Create multiple records
+    records := []SessionRecord{
+        {ID: "session-1", WorktreeID: "wt-1", Active: true},
+        {ID: "session-2", WorktreeID: "wt-2", Active: true},
+        {ID: "session-3", WorktreeID: "wt-1", Active: false},
+    }
+    
+    for _, r := range records {
+        db.Create(&r)
+    }
+    
+    // Query active sessions
+    var activeRecords []SessionRecord
+    result := db.Where("active = ?", true).Find(&activeRecords)
+    
+    assert.NoError(t, result.Error)
+    assert.Len(t, activeRecords, 2)
+}
+
+func TestSessionRecord_QueryByWorktree(t *testing.T) {
+    db := setupTestDB(t)
+    
+    records := []SessionRecord{
+        {ID: "session-1", WorktreeID: "wt-1", Active: true},
+        {ID: "session-2", WorktreeID: "wt-2", Active: true},
+        {ID: "session-3", WorktreeID: "wt-1", Active: false},
+    }
+    
+    for _, r := range records {
+        db.Create(&r)
+    }
+    
+    var worktree1Records []SessionRecord
+    result := db.Where("worktree_id = ?", "wt-1").Find(&worktree1Records)
+    
+    assert.NoError(t, result.Error)
+    assert.Len(t, worktree1Records, 2)
+}
+```
+
+### 11.4 组件测试
+
+```typescript
+// frontend/src/components/Terminal/__tests__/TerminalPane.test.tsx
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import TerminalPane from '../TerminalPane'
+
+// Mock stores
+const mockTerminalStore = {
+  sessions: [],
+  activeSessionId: null,
+  loading: false,
+  createOrAttachSession: vi.fn(),
+  setActiveSession: vi.fn(),
+  detachSession: vi.fn(),
+  destroySession: vi.fn(),
+  subscribeToEvents: vi.fn(),
+  unsubscribeFromEvents: vi.fn(),
+}
+
+const mockWorktreeStore = {
+  selectedId: null,
+}
+
+vi.mock('../../stores/terminalStore', () => ({
+  useTerminalStore: (selector?: (state: any) => any) => 
+    selector ? selector(mockTerminalStore) : mockTerminalStore,
+}))
+
+vi.mock('../../stores/worktreeStore', () => ({
+  useWorktreeStore: (selector?: (state: any) => any) =>
+    selector ? selector(mockWorktreeStore) : mockWorktreeStore,
+}))
+
+// Mock Terminal component
+vi.mock('../Terminal', () => ({
+  default: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid={`terminal-${sessionId}`}>Terminal {sessionId}</div>
+  ),
+}))
+
+describe('TerminalPane', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockTerminalStore.sessions = []
+    mockTerminalStore.activeSessionId = null
+    mockTerminalStore.loading = false
+    mockWorktreeStore.selectedId = null
+  })
+
+  it('should show placeholder when no session', () => {
+    render(<TerminalPane />)
+    
+    expect(screen.getByText(/select a worktree/i)).toBeInTheDocument()
+  })
+
+  it('should show loading state', () => {
+    mockTerminalStore.loading = true
+    
+    render(<TerminalPane />)
+    
+    expect(screen.getByText(/starting terminal/i)).toBeInTheDocument()
+  })
+
+  it('should call createOrAttachSession when worktree selected', () => {
+    mockWorktreeStore.selectedId = 'wt-1'
+    mockTerminalStore.sessions = []
+    
+    render(<TerminalPane />)
+    
+    expect(mockTerminalStore.createOrAttachSession).toHaveBeenCalled()
+  })
+
+  it('should use hidden class for inactive terminals', () => {
+    mockTerminalStore.sessions = [
+      { id: 'session-1', worktreeId: 'wt-1', state: 'running' },
+      { id: 'session-2', worktreeId: 'wt-1', state: 'running' },
+    ] as any
+    mockTerminalStore.activeSessionId = 'session-1'
+    mockWorktreeStore.selectedId = 'wt-1'
+    
+    render(<TerminalPane />)
+    
+    // Both terminals should be in DOM (not conditionally rendered)
+    expect(screen.getByTestId('terminal-session-1')).toBeInTheDocument()
+    expect(screen.getByTestId('terminal-session-2')).toBeInTheDocument()
+  })
+})
+```
+
+### 11.5 防抖函数测试
+
+```typescript
+// frontend/src/lib/__tests__/debounce.test.ts
+import { describe, it, expect, vi } from 'vitest'
+import { debounce } from '../debounce'
+
+describe('debounce', () => {
+  it('should delay function execution', async () => {
+    const fn = vi.fn()
+    const debounced = debounce(fn, 50)
+    
+    debounced()
+    expect(fn).not.toHaveBeenCalled()
+    
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('should cancel previous call on rapid invocation', async () => {
+    const fn = vi.fn()
+    const debounced = debounce(fn, 50)
+    
+    debounced('first')
+    debounced('second')
+    debounced('third')
+    
+    await new Promise(resolve => setTimeout(resolve, 60))
+    
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fn).toHaveBeenCalledWith('third')
+  })
+
+  it('should work with no arguments', async () => {
+    const fn = vi.fn()
+    const debounced = debounce(fn, 10)
+    
+    debounced()
+    
+    await new Promise(resolve => setTimeout(resolve, 20))
+    
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+})
+```
+
+### 11.6 测试命令
+
+```bash
+# 运行所有测试
+npm test
+
+# 运行 Phase 3 相关测试
+npm test -- --grep "TerminalPane|debounce|SessionRecord"
+
+# 生成覆盖率报告
+npm run test:coverage
+```
+
+### 11.7 测试覆盖目标
+
+| 模块 | 目标覆盖率 | 当前状态 |
+|------|-----------|---------|
+| SessionRecord CRUD | 90% | 待实现 |
+| TerminalPane 组件 | 70% | 待实现 |
+| debounce 函数 | 100% | 待实现 |
+
+### 11.8 不适合自动化的测试
+
+| 内容 | 原因 | 替代方案 |
+|------|------|---------|
+| tmux session 附加 | 需要真实 tmux 环境 | 手动测试 |
+| TUI 应用兼容性 | 需要 vim/htop 等 | 手动测试矩阵 |
+| 内存泄漏检测 | 需要长时间运行 | 性能监控工具 |
+| 焦点恢复验证 | 需要 DOM 焦点 | 手动测试 |
+
