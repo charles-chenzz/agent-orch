@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"agent-orch/internal/db"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -84,7 +85,7 @@ func fallbackShell() string {
 }
 
 // NewManager 创建终端管理器
-func NewManager(ctx context.Context) *Manager {
+func NewManager(ctx context.Context, database *db.Database) *Manager {
 	tmuxPath, err := exec.LookPath("tmux")
 	hasTmux := err == nil
 
@@ -93,6 +94,7 @@ func NewManager(ctx context.Context) *Manager {
 		ctx:      ctx,
 		tmuxPath: tmuxPath,
 		hasTmux:  hasTmux,
+		db:       database,
 	}
 }
 
@@ -514,4 +516,148 @@ func parseUnixSeconds(value string) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(secs, 0)
+}
+
+// === 会话持久化 (F3.11-F3.12) ===
+
+// SaveSession 保存单个会话到数据库
+func (m *Manager) SaveSession(id string) error {
+	if m.db == nil {
+		return nil // 数据库未初始化，跳过保存
+	}
+
+	m.mu.RLock()
+	session, ok := m.sessions[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("session not found: %s", id)
+	}
+
+	// 获取当前 PTY 尺寸
+	var cols, rows uint16
+	if session.PTY != nil {
+		ws, err := pty.GetsizeFull(session.PTY)
+		if err == nil {
+			cols = ws.Cols
+			rows = ws.Rows
+		}
+	}
+
+	return m.db.SaveSessionRecord(
+		session.ID,
+		session.WorktreeID,
+		session.CWD,
+		session.TmuxSession,
+		cols,
+		rows,
+		session.State == StateRunning,
+	)
+}
+
+// SaveAllSessions 保存所有活跃会话
+func (m *Manager) SaveAllSessions() error {
+	if m.db == nil {
+		return nil
+	}
+
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.sessions))
+	for id, session := range m.sessions {
+		if session.State == StateRunning || session.State == StateDetached {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.RUnlock()
+
+	var lastErr error
+	for _, id := range ids {
+		if err := m.SaveSession(id); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+// RestoreSessions 从数据库恢复会话
+func (m *Manager) RestoreSessions() error {
+	if m.db == nil {
+		return nil // 数据库未初始化，跳过恢复
+	}
+
+	records, err := m.db.GetActiveSessionRecords()
+	if err != nil {
+		return fmt.Errorf("failed to get session records: %w", err)
+	}
+
+	for _, record := range records {
+		// 检查 tmux session 是否还存在
+		if record.TmuxSession != "" && m.hasTmux {
+			if m.tmuxSessionExists(record.TmuxSession) {
+				// tmux session 仍存在，尝试附加
+				if err := m.attachTmuxSession(record.SessionID, record.WorktreeID, record.TmuxSession, record.CWD, record.Cols, record.Rows); err != nil {
+					// 附加失败，标记为非活跃
+					m.db.MarkSessionInactive(record.SessionID)
+				}
+				continue
+			}
+		}
+
+		// tmux session 不存在或未使用 tmux，创建新会话
+		if err := m.CreateOrAttachSession(record.SessionID, record.WorktreeID, record.CWD); err != nil {
+			m.db.MarkSessionInactive(record.SessionID)
+		}
+	}
+
+	return nil
+}
+
+// tmuxSessionExists 检查 tmux session 是否存在
+func (m *Manager) tmuxSessionExists(name string) bool {
+	if !m.hasTmux {
+		return false
+	}
+	cmd := exec.Command(m.tmuxPath, "has-session", "-t", name)
+	return cmd.Run() == nil
+}
+
+// attachTmuxSession 附加到现有 tmux session
+func (m *Manager) attachTmuxSession(sessionID, worktreeID, tmuxSession, cwd string, cols, rows uint16) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 创建附加命令
+	cmd := exec.Command(m.tmuxPath, "attach-session", "-t", tmuxSession)
+
+	// 启动 PTY
+	ptyFile, err := pty.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to attach to tmux: %w", err)
+	}
+
+	// 设置尺寸
+	if cols > 0 && rows > 0 {
+		pty.Setsize(ptyFile, &pty.Winsize{Cols: cols, Rows: rows})
+	}
+
+	// 创建会话对象
+	session := &Session{
+		ID:          sessionID,
+		WorktreeID:  worktreeID,
+		CWD:         cwd,
+		TmuxSession: tmuxSession,
+		State:       StateRunning,
+		PTY:         ptyFile,
+		Cmd:         cmd,
+		CreatedAt:   time.Now(),
+		LastActive:  time.Now(),
+	}
+
+	m.sessions[sessionID] = session
+	m.emitState(session)
+
+	// 启动输出读取协程
+	go m.readOutput(session)
+
+	return nil
 }

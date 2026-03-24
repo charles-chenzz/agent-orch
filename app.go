@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"agent-orch/internal/config"
+	"agent-orch/internal/db"
 	"agent-orch/internal/terminal"
 	"agent-orch/internal/worktree"
 )
@@ -13,6 +15,7 @@ type App struct {
 	ctx       context.Context
 	worktree  *worktree.Manager
 	terminal  *terminal.Manager
+	db        *db.Database
 	repoPath  string
 }
 
@@ -28,8 +31,16 @@ func (a *App) startup(ctx context.Context) {
 	// TODO: 从配置获取仓库路径，暂时使用当前目录
 	a.repoPath = "."
 
-	// 初始化终端管理器
-	a.terminal = terminal.NewManager(ctx)
+	// 初始化配置和数据库
+	cfg, _ := config.Load()
+	if cfg != nil {
+		if database, err := db.Init(cfg.DatabasePath()); err == nil {
+			a.db = database
+		}
+	}
+
+	// 初始化终端管理器（传入 db 用于会话持久化）
+	a.terminal = terminal.NewManager(ctx, a.db)
 
 	// 初始化 worktree 管理器（使用当前目录）
 	if mgr, err := worktree.NewManager("."); err == nil {

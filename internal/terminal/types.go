@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"agent-orch/internal/db"
 )
 
 // SessionState 会话状态
@@ -39,8 +41,16 @@ type Manager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
 	ctx      context.Context
-	tmuxPath string // tmux 可执行文件路径
-	hasTmux  bool   // tmux 是否可用
+	tmuxPath string     // tmux 可执行文件路径
+	hasTmux  bool       // tmux 是否可用
+	db       DBProvider // 数据库接口（可选，用于会话持久化）
+}
+
+// DBProvider 数据库接口（用于会话持久化）
+type DBProvider interface {
+	SaveSessionRecord(sessionID, worktreeID, cwd, tmuxSession string, cols, rows uint16, active bool) error
+	GetActiveSessionRecords() ([]db.SessionRecord, error)
+	MarkSessionInactive(sessionID string) error
 }
 
 // TerminalConfig 终端配置

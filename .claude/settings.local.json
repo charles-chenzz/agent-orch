@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:51741/hook/complete 2>/dev/null || echo \"连接失败\")",
+      "Bash(echo \"SUPERSET_PORT: $SUPERSET_PORT\"\necho \"SUPERSET_TAB_ID: $SUPERSET_TAB_ID\"\necho \"SUPERSET_PANE_ID: $SUPERSET_PANE_ID\")",
+      "Bash(cd:*)",
+      "Bash(npx tsc:*)",
+      "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(npm install:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(wails generate:*)",
+      "Bash(npm run:*)",
+      "Bash(wails dev:*)",
+      "Bash(ls -la /Users/rekles/AI/agent-orch/*.json)",
+      "Bash(pkill -f agent-orch)",
+      "Bash(pkill -f vite)",
+      "Bash(pkill -f node)",
+      "Bash(2)",
+      "Bash(pkill -f wails)",
+      "Bash(pkill -f node 2)",
+      "Bash(/dev/null sleep:*)",
+      "Bash(ls -la *.go)"
+    ]
+  }
+}

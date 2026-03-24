@@ -7,44 +7,75 @@
 
 ---
 
+## 0. 实现进度
+
+> **最后更新**：2026-03-24
+
+| 模块 | 完成度 | 状态 |
+|------|--------|------|
+| 终端稳定性 | 100% | ✅ 完成 |
+| 多终端 Tab | 60% | ✅ 核心完成 |
+| 会话持久化 | 10% | 🚧 待开发 |
+| TUI 兼容性 | 0% | ⏳ 待测试 |
+| **整体进度** | **~50%** | 🚧 进行中 |
+
+### 已完成特性
+
+- [x] Tab 切换状态恢复（display:none/block 保留内容）
+- [x] ResizeObserver + 50ms 防抖
+- [x] Tab 切换闪烁修复（只在 active 时响应 resize）
+- [x] 多 Tab 创建/关闭/切换
+- [x] 智能 shell 检测（oh-my-zsh/starship/fish 等）
+- [x] 默认 bash 自动 cd 到 worktree 目录
+
+### 待完成
+
+- [ ] F3.11 会话状态保存到 DB
+- [ ] F3.12 应用重启后恢复
+- [ ] F3.14-F3.17 TUI 兼容性测试
+- [ ] F3.9 Tab 重命名（P2）
+- [ ] F3.10 Tab 拖拽排序（P2）
+
+---
+
 ## 1. Feature List
 
-### 1.1 终端稳定性
+### 1.1 终端稳定性 ✅
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F3.1 | Tab 切换状态恢复 | P0 |
-| F3.2 | ResizeObserver + 防抖 | P0 |
-| F3.3 | Resize 闪烁修复 | P0 |
-| F3.4 | 光标位置恢复 | P1 |
-| F3.5 | 滚动位置保持 | P1 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F3.1 | Tab 切换状态恢复 | P0 | ✅ |
+| F3.2 | ResizeObserver + 防抖 | P0 | ✅ |
+| F3.3 | Resize 闪烁修复 | P0 | ✅ |
+| F3.4 | 光标位置恢复 | P1 | ✅ (xterm.js 自动) |
+| F3.5 | 滚动位置保持 | P1 | ✅ (xterm.js scrollback) |
 
 ### 1.2 多终端 Tab
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F3.6 | 多 Tab 创建 | P0 |
-| F3.7 | Tab 关闭 | P0 |
-| F3.8 | Tab 切换 | P0 |
-| F3.9 | Tab 重命名 | P2 |
-| F3.10 | Tab 拖拽排序 | P2 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F3.6 | 多 Tab 创建 | P0 | ✅ |
+| F3.7 | Tab 关闭 | P0 | ✅ |
+| F3.8 | Tab 切换 | P0 | ✅ |
+| F3.9 | Tab 重命名 | P2 | ❌ |
+| F3.10 | Tab 拖拽排序 | P2 | ❌ |
 
 ### 1.3 会话持久化
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F3.11 | 会话状态保存到 DB | P1 |
-| F3.12 | 应用重启后恢复 | P1 |
-| F3.13 | tmux session 附加 | P0 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F3.11 | 会话状态保存到 DB | P1 | ❌ 待开发 |
+| F3.12 | 应用重启后恢复 | P1 | ❌ 待开发 |
+| F3.13 | tmux session 附加 | P0 | ⚠️ 后端已有，前端未集成 |
 
 ### 1.4 TUI 兼容性
 
-| Feature | 描述 | 优先级 |
-|---------|------|--------|
-| F3.14 | vim 兼容测试 | P0 |
-| F3.15 | htop 兼容测试 | P0 |
-| F3.16 | Claude Code 兼容测试 | P0 |
-| F3.17 | Codex 兼容测试 | P1 |
+| Feature | 描述 | 优先级 | 状态 |
+|---------|------|--------|------|
+| F3.14 | vim 兼容测试 | P0 | ⏳ 待测试 |
+| F3.15 | htop 兼容测试 | P0 | ⏳ 待测试 |
+| F3.16 | Claude Code 兼容测试 | P0 | ⏳ 待测试 |
+| F3.17 | Codex 兼容测试 | P1 | ⏳ 待测试 |
 
 ---
 
@@ -1066,4 +1097,267 @@ npm run test:coverage
 | TUI 应用兼容性 | 需要 vim/htop 等 | 手动测试矩阵 |
 | 内存泄漏检测 | 需要长时间运行 | 性能监控工具 |
 | 焦点恢复验证 | 需要 DOM 焦点 | 手动测试 |
+
+---
+
+## 12. 会话持久化测试设计 (F3.11-F3.12)
+
+### 12.1 架构概览
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        前端                                   │
+│  terminalStore.ts                                           │
+│  - sessions[] (内存状态)                                     │
+│  - activeSessionId                                          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ Wails IPC
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        后端 (Go)                              │
+│  Manager                                                     │
+│  - sessions map (内存状态)                                   │
+│  - SaveSession() → DB                                       │
+│  - RestoreSessions() ← DB                                   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        持久层                                 │
+│  SQLite (~/.config/agent-orch/data.db)                      │
+│  - SessionRecord 表                                         │
+│  - tmux session (外部进程，独立存活)                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 12.2 验证职责划分
+
+| 验证项 | 后端测试 | 前端测试 | 集成测试 |
+|--------|----------|----------|----------|
+| SessionRecord CRUD | ✅ | - | - |
+| SaveSession 逻辑 | ✅ | - | - |
+| RestoreSessions 逻辑 | ✅ | - | - |
+| tmux session 存在检测 | ✅ | - | - |
+| 调用恢复 API | - | ✅ Mock | ✅ |
+| 会话列表渲染 | - | ✅ Mock | - |
+| 完整保存→恢复流程 | - | - | ✅ |
+
+### 12.3 后端测试用例
+
+```go
+// internal/terminal/persistence_test.go
+package terminal
+
+import (
+    "testing"
+    "path/filepath"
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+)
+
+func setupTestDB(t *testing.T) *gorm.DB {
+    tmpDir := t.TempDir()
+    dbPath := filepath.Join(tmpDir, "test.db")
+
+    db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+    require.NoError(t, err)
+
+    db.AutoMigrate(&SessionRecord{})
+
+    return db
+}
+
+// === CRUD 测试 ===
+
+func TestSessionRecord_Create(t *testing.T) {
+    db := setupTestDB(t)
+
+    record := SessionRecord{
+        ID:          "session-1",
+        WorktreeID:  "wt-main",
+        CWD:         "/path/to/worktree",
+        TmuxSession: "agent-orch-session-1",
+        Cols:        120,
+        Rows:        40,
+        Active:      true,
+    }
+
+    result := db.Create(&record)
+    assert.NoError(t, result.Error)
+    assert.NotZero(t, record.ID)
+}
+
+func TestSessionRecord_QueryByActive(t *testing.T) {
+    db := setupTestDB(t)
+
+    // 创建测试数据
+    records := []SessionRecord{
+        {ID: "s1", WorktreeID: "wt-1", Active: true},
+        {ID: "s2", WorktreeID: "wt-2", Active: true},
+        {ID: "s3", WorktreeID: "wt-1", Active: false},
+    }
+    for _, r := range records {
+        db.Create(&r)
+    }
+
+    // 查询活跃会话
+    var activeRecords []SessionRecord
+    result := db.Where("active = ?", true).Find(&activeRecords)
+
+    assert.NoError(t, result.Error)
+    assert.Len(t, activeRecords, 2)
+}
+
+func TestSessionRecord_QueryByWorktree(t *testing.T) {
+    db := setupTestDB(t)
+
+    records := []SessionRecord{
+        {ID: "s1", WorktreeID: "wt-1", Active: true},
+        {ID: "s2", WorktreeID: "wt-2", Active: true},
+        {ID: "s3", WorktreeID: "wt-1", Active: false},
+    }
+    for _, r := range records {
+        db.Create(&r)
+    }
+
+    var worktree1Records []SessionRecord
+    result := db.Where("worktree_id = ?", "wt-1").Find(&worktree1Records)
+
+    assert.NoError(t, result.Error)
+    assert.Len(t, worktree1Records, 2)
+}
+
+// === Manager 方法测试 ===
+
+func TestManager_SaveSession(t *testing.T) {
+    // 需要 mock Manager 和 DB
+    // 测试保存会话到数据库
+}
+
+func TestManager_SaveSession_NotFound(t *testing.T) {
+    // 测试会话不存在时的错误处理
+}
+
+func TestManager_RestoreSessions_Empty(t *testing.T) {
+    // DB 无记录时，应返回空列表
+}
+
+func TestManager_RestoreSessions_WithRecords(t *testing.T) {
+    // DB 有记录时，应正确恢复
+}
+
+// === 集成测试（需要 tmux）===
+
+//go:build integration
+func TestManager_RestoreSessions_TmuxAttach(t *testing.T) {
+    // 附加到现有 tmux session
+}
+
+//go:build integration
+func TestManager_RestoreSessions_TmuxGone(t *testing.T) {
+    // tmux session 已被杀死，应创建新 session
+}
+```
+
+### 12.4 前端测试用例
+
+```typescript
+// frontend/src/stores/__tests__/terminalStore.persistence.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useTerminalStore } from '../terminalStore'
+
+// Mock Wails bindings
+vi.mock('../../../wailsjs/go/main/App', () => ({
+  RestoreTerminalSessions: vi.fn().mockResolvedValue([
+    { id: 'session-1', worktreeId: 'wt-main', cwd: '/path', state: 'detached' },
+  ]),
+  SaveTerminalSessions: vi.fn().mockResolvedValue(undefined),
+  CreateOrAttachTerminal: vi.fn().mockResolvedValue(undefined),
+  ListTerminalSessions: vi.fn().mockResolvedValue([]),
+}))
+
+describe('terminalStore persistence', () => {
+  beforeEach(() => {
+    useTerminalStore.setState({
+      sessions: [],
+      activeSessionId: null,
+    })
+  })
+
+  it('should call RestoreTerminalSessions on init', async () => {
+    const { restoreSessions } = useTerminalStore.getState()
+    await restoreSessions()
+
+    const state = useTerminalStore.getState()
+    expect(state.sessions).toHaveLength(1)
+  })
+
+  it('should handle restore errors gracefully', async () => {
+    const { RestoreTerminalSessions } = await import('../../../wailsjs/go/main/App')
+    vi.mocked(RestoreTerminalSessions).mockRejectedValueOnce(new Error('DB error'))
+
+    const { restoreSessions } = useTerminalStore.getState()
+
+    // 不应抛出错误
+    await expect(restoreSessions()).resolves.not.toThrow()
+  })
+
+  it('should call SaveTerminalSessions with active sessions', async () => {
+    useTerminalStore.setState({
+      sessions: [
+        { id: 's1', worktreeId: 'wt-1', state: 'running' },
+      ] as any,
+    })
+
+    const { saveSessions } = useTerminalStore.getState()
+    await saveSessions()
+
+    const { SaveTerminalSessions } = await import('../../../wailsjs/go/main/App')
+    expect(SaveTerminalSessions).toHaveBeenCalledWith(['s1'])
+  })
+})
+```
+
+### 12.5 集成测试流程
+
+```
+手动测试清单：
+
+1. 启动应用
+2. 创建 2 个 terminal session (session-1, session-2)
+3. 在每个 session 中执行不同命令：
+   - session-1: echo "hello from session-1"
+   - session-2: echo "hello from session-2"
+4. 关闭应用（触发 SaveSession）
+5. 验证数据库：
+   - sqlite3 ~/.config/agent-orch/data.db "SELECT * FROM session_records;"
+6. 重新启动应用
+7. 验证：
+   - ListTerminalSessions 返回 2 个 session
+   - 切换到 session-1，检查历史输出包含 "session-1"
+   - 切换到 session-2，检查历史输出包含 "session-2"
+8. 清理：删除测试数据
+```
+
+### 12.6 测试命令
+
+```bash
+# 后端单元测试
+go test ./internal/terminal/... -run "SessionRecord|SaveSession|Restore"
+
+# 后端集成测试（需要 tmux）
+go test ./internal/terminal/... -tags=integration -run "Tmux"
+
+# 前端测试
+cd frontend && npm test -- --grep "persistence"
+
+# 查看数据库
+sqlite3 ~/.config/agent-orch/data.db ".tables"
+sqlite3 ~/.config/agent-orch/data.db "SELECT * FROM session_records;"
+```
+
 
