@@ -18,6 +18,71 @@ const tmuxListFormat = "#{session_name}\t#{session_attached}\t#{session_created}
 
 var execCommand = exec.Command
 
+// detectPreferredShell 检测用户的首选 shell
+// 返回: shell 路径, 是否是增强型 shell（有 oh-my-zsh/starship 等配置）
+// 增强型 shell 通常会自动处理工作目录，无需额外 cd
+func detectPreferredShell() (string, bool) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fallbackShell(), false
+	}
+
+	// 检查 zsh 配置
+	zshrc := homeDir + "/.zshrc"
+	if data, err := os.ReadFile(zshrc); err == nil {
+		content := string(data)
+		// 检测现代 prompt 配置
+		if strings.Contains(content, "oh-my-zsh") ||
+			strings.Contains(content, "starship") ||
+			strings.Contains(content, "powerlevel") ||
+			strings.Contains(content, "pure") ||
+			strings.Contains(content, "p10k") ||
+			strings.Contains(content, "agnoster") {
+			if zshPath, err := exec.LookPath("zsh"); err == nil {
+				return zshPath, true // 增强型
+			}
+		}
+	}
+
+	// 检查 fish 配置
+	fishConfig := homeDir + "/.config/fish/config.fish"
+	if data, err := os.ReadFile(fishConfig); err == nil {
+		content := string(data)
+		if strings.Contains(content, "starship") ||
+			strings.Contains(content, "tide") ||
+			strings.Contains(content, "bobthefish") ||
+			strings.Contains(content, "pure") {
+			if fishPath, err := exec.LookPath("fish"); err == nil {
+				return fishPath, true // 增强型
+			}
+		}
+	}
+
+	// 检查 bash 配置
+	bashrc := homeDir + "/.bashrc"
+	if data, err := os.ReadFile(bashrc); err == nil {
+		content := string(data)
+		if strings.Contains(content, "starship") ||
+			strings.Contains(content, "powerline") ||
+			strings.Contains(content, "liquidprompt") {
+			if bashPath, err := exec.LookPath("bash"); err == nil {
+				return bashPath, true // 增强型
+			}
+		}
+	}
+
+	return fallbackShell(), false // 默认 shell
+}
+
+// fallbackShell 返回默认 shell
+func fallbackShell() string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		return "/bin/bash"
+	}
+	return shell
+}
+
 // NewManager 创建终端管理器
 func NewManager(ctx context.Context) *Manager {
 	tmuxPath, err := exec.LookPath("tmux")
@@ -64,22 +129,25 @@ func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
 	var cmd *exec.Cmd
 	var tmuxSession string
 
+    // 检测用户首选 shell（支持 oh-my-zsh、starship 等现代配置）
+    // isEnhanced 表示是否有增强型配置，这类 shell 通常会自动处理工作目录
+    shell, isEnhanced := detectPreferredShell()
+
     if m.hasTmux {
         // 使用 tmux（-A 如果不存在则创建）
         tmuxSession = fmt.Sprintf("%s%s", tmuxSessionPrefix, id)
         cmd = exec.Command(m.tmuxPath, "new-session",
             "-A",              // 如果不存在则创建
             "-s", tmuxSession, // session 名称
-            "-c", cwd, // 工作目录
+            "-c", cwd,         // 工作目录
             "-e", "TERM=xterm-256color", // 设置 TERM 环境变量
+            "--",              // 分隔符，后面是 shell 命令
+            shell, "-l",       // 作为 login shell 启动，加载用户配置
         )
     } else {
-        // 直接使用 shell
-        shell := os.Getenv("SHELL")
-        if shell == "" {
-            shell = "/bin/bash"
-        }
-        cmd = exec.Command(shell)
+        // 直接使用 shell，作为 login shell 启动
+        // -l 参数确保加载 .bash_profile / .zprofile / config.fish
+        cmd = exec.Command(shell, "-l")
         cmd.Dir = cwd
         // 设置必要的环境变量
         cmd.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -103,6 +171,17 @@ func (m *Manager) CreateOrAttachSession(id, worktreeID, cwd string) error {
 
 	// 启动输出读取协程
 	go m.readOutput(session)
+
+	// 对于非增强型 shell（如默认 bash），需要手动 cd 到工作目录
+	// 增强型 shell（oh-my-zsh/starship 等）通常会自动处理
+	if cwd != "" && !isEnhanced {
+		// 等待 shell 启动
+		time.Sleep(100 * time.Millisecond)
+		// 使用 \cd 绕过 alias，单引号包裹路径防止特殊字符问题
+		escapedPath := "'" + strings.ReplaceAll(cwd, "'", `'\''`) + "'"
+		cdCmd := fmt.Sprintf("\\cd %s\n", escapedPath)
+		session.PTY.Write([]byte(cdCmd))
+	}
 
 	return nil
 }

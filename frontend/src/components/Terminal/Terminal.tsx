@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useTerminal } from '../../hooks/useTerminal'
 
 interface TerminalProps {
@@ -14,30 +14,58 @@ export default function Terminal({ sessionId, className = '', isActive = true }:
     fontSize: 13,
   })
 
-  // Listen for container resize
+  const resizeTimeoutRef = useRef<number | null>(null)
+  const lastColsRef = useRef<number>(0)
+  const lastRowsRef = useRef<number>(0)
+
+  // Listen for container resize - only when active
   useEffect(() => {
     const container = containerRef.current
-    if (!container) return
+    if (!container || !ready) return
 
     const observer = new ResizeObserver(() => {
-      handleResize()
+      // Only resize when terminal is visible
+      if (!isActive) return
+
+      // Debounce to avoid flickering during tab switch
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
+      }
+
+      resizeTimeoutRef.current = window.setTimeout(() => {
+        // Get current terminal dimensions
+        const terminal = containerRef.current?.querySelector('.xterm')
+        if (terminal) {
+          const rect = terminal.getBoundingClientRect()
+          // Only resize if dimensions actually changed significantly
+          if (rect.width > 0 && rect.height > 0) {
+            handleResize()
+          }
+        }
+      }, 50)
     })
 
     observer.observe(container)
 
-    return () => observer.disconnect()
-  }, [handleResize, ready])
+    return () => {
+      observer.disconnect()
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
+      }
+    }
+  }, [handleResize, ready, isActive])
 
-  // Auto-focus when terminal becomes active
+  // Handle resize when becoming active (tab switch)
   useEffect(() => {
     if (isActive && ready) {
-      // Small delay to ensure DOM is ready
+      // Delay to ensure display: block has taken effect
       const timer = setTimeout(() => {
+        handleResize()
         focus()
       }, 50)
       return () => clearTimeout(timer)
     }
-  }, [isActive, ready, focus])
+  }, [isActive, ready, handleResize, focus])
 
   return (
     <div
