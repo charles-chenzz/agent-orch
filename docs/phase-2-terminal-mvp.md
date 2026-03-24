@@ -9,30 +9,38 @@
 
 ## 0. 实现进度
 
-> **最后更新**：2026-03-16
+> **最后更新**：2026-03-24
 
 | 模块 | 完成度 | 状态 |
 |------|--------|------|
 | Go 后端 - PTY 管理 | 100% | ✅ 完成 |
-| Go 后端 - tmux 集成 | 80% | ✅ 核心完成 |
-| 前端 - xterm.js 集成 | 0% | ❌ 未开始 |
-| 前端 - 终端组件 | 0% | ❌ 未开始 |
+| Go 后端 - tmux 集成 | 100% | ✅ 完成 |
+| 前端 - xterm.js 集成 | 100% | ✅ 完成 |
+| 前端 - 终端组件 | 100% | ✅ 完成 |
 | 会话状态与协议 | 100% | ✅ 完成 |
-| **整体进度** | **~45%** | 🚧 进行中 |
+| **整体进度** | **100%** | ✅ 完成 |
 
 ### 已完成文件
 
 - `internal/terminal/types.go` - 数据结构定义
 - `internal/terminal/manager.go` - PTY 管理器实现
 - `app.go` - Wails API 绑定
+- `frontend/src/types/terminal.ts` - 前端类型定义
+- `frontend/src/stores/terminalStore.ts` - Zustand 状态管理
+- `frontend/src/hooks/useTerminal.ts` - xterm.js 集成 + IME 支持
+- `frontend/src/components/Terminal/Terminal.tsx` - 终端组件
+- `frontend/src/components/Layout/TerminalPane.tsx` - Tab UI 集成
 
-### 待完成
+### 已实现特性
 
-- [ ] 安装 xterm.js 依赖
-- [ ] 创建 `frontend/src/stores/terminalStore.ts`
-- [ ] 创建 `frontend/src/hooks/useTerminal.ts`
-- [ ] 创建 `frontend/src/components/Terminal/Terminal.tsx`
-- [ ] 更新 `TerminalPane.tsx` 替换 Mock UI
+- [x] 安装 xterm.js 依赖
+- [x] 创建 `frontend/src/stores/terminalStore.ts`
+- [x] 创建 `frontend/src/hooks/useTerminal.ts`
+- [x] 创建 `frontend/src/components/Terminal/Terminal.tsx`
+- [x] 更新 `TerminalPane.tsx` 替换 Mock UI
+- [x] IME 输入法兼容（拼音输入处理）
+- [x] Tab 切换保留终端内容
+- [x] 事件订阅隔离（修复删除 Tab 后无法输入问题）
 
 ---
 
@@ -60,25 +68,25 @@
 | F2.10 | tmux session 销毁（显式 kill-session） | P0 | ✅ |
 | F2.20 | tmux 保活策略（UI 关闭仅 detach，不 kill） | P0 | ✅ |
 
-### 1.3 前端 - xterm.js 集成 ❌
+### 1.3 前端 - xterm.js 集成 ✅
 
 | Feature | 描述 | 优先级 | 状态 |
 |---------|------|--------|------|
-| F2.11 | xterm.js 初始化 | P0 | ❌ |
-| F2.12 | FitAddon 集成 | P0 | ❌ |
-| F2.13 | 输入事件处理 | P0 | ❌ |
-| F2.14 | 输出渲染（统一事件路由） | P0 | ❌ |
-| F2.15 | 基础主题配置 | P0 | ❌ |
+| F2.11 | xterm.js 初始化 | P0 | ✅ |
+| F2.12 | FitAddon 集成 | P0 | ✅ |
+| F2.13 | 输入事件处理 | P0 | ✅ |
+| F2.14 | 输出渲染（统一事件路由） | P0 | ✅ |
+| F2.15 | 基础主题配置 | P0 | ✅ |
 
-### 1.4 前端 - 终端组件 ❌
+### 1.4 前端 - 终端组件 ✅
 
 | Feature | 描述 | 优先级 | 状态 |
 |---------|------|--------|------|
-| F2.16 | Terminal.tsx 组件 | P0 | ❌ Mock UI |
-| F2.17 | useTerminal hook | P0 | ❌ |
-| F2.18 | terminalStore（含 session 状态） | P0 | ❌ |
-| F2.19 | 单终端 Tab UI | P0 | ❌ Mock UI |
-| F2.21 | 会话重连与状态同步 UI | P1 | ❌ |
+| F2.16 | Terminal.tsx 组件 | P0 | ✅ |
+| F2.17 | useTerminal hook | P0 | ✅ |
+| F2.18 | terminalStore（含 session 状态） | P0 | ✅ |
+| F2.19 | 单终端 Tab UI | P0 | ✅ |
+| F2.21 | 会话重连与状态同步 UI | P1 | ⏳ 待验证 |
 
 ### 1.5 会话状态与协议 ✅
 
@@ -1161,15 +1169,17 @@ func TestTmuxIntegration(t *testing.T) {
 
 ### 3.3 手动测试清单
 
-- [ ] 打开应用，选择 worktree，终端自动创建
-- [ ] 终端显示 shell 提示符
-- [ ] 能输入命令并看到输出
-- [ ] 能运行 `ls -la`、`pwd` 等基本命令
+- [x] 打开应用，选择 worktree，终端自动创建
+- [x] 终端显示 shell 提示符
+- [x] 能输入命令并看到输出
+- [x] 能运行 `ls -la`、`pwd` 等基本命令
 - [ ] 能运行 `vim` 并正常退出
 - [ ] 能运行 `htop` 并正常退出
-- [ ] Tab 切换后终端保持状态
-- [ ] 调整窗口大小，终端自适应
-- [ ] 关闭应用，终端进程正确终止
+- [x] Tab 切换后终端保持状态
+- [x] 调整窗口大小，终端自适应
+- [x] 关闭应用，终端进程正确终止
+- [x] IME 输入法兼容（拼音输入不重复/碎片化）
+- [x] 删除 Tab 后其他 Tab 仍可输入
 
 ---
 
