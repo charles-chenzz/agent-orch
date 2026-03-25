@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
+import { CreateWorktreeDialog, DeleteWorktreeDialog } from '../ui/WorktreeDialog'
 
 export default function TopPanel() {
   const { topPanelCollapsed, toggleTopPanel } = useAppStore()
@@ -97,84 +99,61 @@ function ProjectListCompact() {
     deleteWorktree,
   } = useAppStore()
 
-  const handleCreateWorktree = async (projectId: string) => {
-    if (projectId !== 'agent-orch') {
-      window.alert('Only the active runtime project supports creating worktrees.')
-      return
-    }
+  // Dialog state
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-    const name = window.prompt('New worktree name (folder name):', '')
-    if (!name) return
-
-    const trimmedName = name.trim()
-    if (!trimmedName) return
-
-    const branch = window.prompt('Branch name:', trimmedName)?.trim() || trimmedName
-    const baseBranch = window.prompt('Base branch:', 'main')?.trim() || 'main'
-
+  const handleCreateWorktree = async (opts: { branch: string; baseBranch: string; createNew: boolean }) => {
     try {
       await createWorktree({
-        name: trimmedName,
-        branch,
-        baseBranch,
-        createNew: true,
+        name: '',  // 后端会自动从 branch 生成
+        branch: opts.branch,
+        baseBranch: opts.baseBranch,
+        createNew: opts.createNew,
       })
     } catch (err) {
-      window.alert(`Failed to create worktree: ${String(err)}`)
+      setError(`Failed to create worktree: ${String(err)}`)
     }
   }
 
-  const handleDeleteWorktree = async (
+  const handleDeleteClick = (
     e: React.MouseEvent<HTMLButtonElement>,
-    projectId: string,
     worktreeId: string,
     worktreeName: string
   ) => {
     e.stopPropagation()
+    setPendingDelete({ id: worktreeId, name: worktreeName })
+    setDeleteDialogOpen(true)
+  }
 
-    if (projectId !== 'agent-orch') {
-      window.alert('Only the active runtime project supports deleting worktrees.')
-      return
-    }
-
-    if (worktreeId === 'main' || worktreeName === 'main') {
-      window.alert('Main worktree cannot be deleted.')
-      return
-    }
-
-    const confirmed = window.confirm(
-      `Delete worktree "${worktreeName}"?\n\nRelated terminal sessions will be destroyed first.`
-    )
-    if (!confirmed) return
-
+  const handleDeleteConfirm = async (force: boolean) => {
+    if (!pendingDelete) return
     try {
-      await deleteWorktree(worktreeId, false)
+      await deleteWorktree(pendingDelete.id, force)
     } catch (err) {
       const msg = String(err)
-      const canForceDelete = msg.includes('ERR_HAS_CHANGES')
-        || msg.includes('ERR_HAS_UNPUSHED')
-        || msg.includes('force=true')
-
-      if (!canForceDelete) {
-        window.alert(`Failed to delete worktree: ${msg}`)
+      if (!force && (msg.includes('ERR_HAS_CHANGES') || msg.includes('ERR_HAS_UNPUSHED'))) {
+        // Reopen with force option visible
+        setDeleteDialogOpen(true)
         return
       }
-
-      const forceDelete = window.confirm(
-        'This worktree has uncommitted changes or unpushed commits.\n\nForce delete anyway?'
-      )
-      if (!forceDelete) return
-
-      try {
-        await deleteWorktree(worktreeId, true)
-      } catch (forceErr) {
-        window.alert(`Force delete failed: ${String(forceErr)}`)
-      }
+      setError(`Failed to delete worktree: ${msg}`)
     }
+    setPendingDelete(null)
   }
 
   return (
     <div className="py-1">
+      {/* Error toast */}
+      {error && (
+        <div className="fixed top-4 right-4 z-50 px-4 py-2 bg-error/90 text-white text-xs rounded shadow-lg animate-fade-in">
+          {error}
+          <button onClick={() => setError(null)} className="ml-2 opacity-70 hover:opacity-100">×</button>
+        </div>
+      )}
+
       {projects.map((project) => {
         const isExpanded = expandedProjectIds.includes(project.id)
         return (
@@ -240,7 +219,7 @@ function ProjectListCompact() {
                           <button
                             className="w-4 h-4 flex items-center justify-center rounded text-text-muted hover:text-error hover:bg-error/10 transition-colors"
                             title={`Delete worktree ${wt.name}`}
-                            onClick={(e) => handleDeleteWorktree(e, project.id, wt.id, wt.name)}
+                            onClick={(e) => handleDeleteClick(e, wt.id, wt.name)}
                           >
                             ×
                           </button>
@@ -255,7 +234,7 @@ function ProjectListCompact() {
                       ? 'text-accent hover:bg-accent/10'
                       : 'text-text-muted/60 cursor-not-allowed'
                   }`}
-                  onClick={() => handleCreateWorktree(project.id)}
+                  onClick={() => project.id === 'agent-orch' && setCreateDialogOpen(true)}
                   title={project.id === 'agent-orch' ? 'Create worktree' : 'Mock project only'}
                 >
                   + New Worktree
@@ -265,6 +244,22 @@ function ProjectListCompact() {
           </div>
         )
       })}
+
+      {/* Dialogs */}
+      <CreateWorktreeDialog
+        isOpen={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        onSubmit={handleCreateWorktree}
+      />
+      <DeleteWorktreeDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => {
+          setDeleteDialogOpen(false)
+          setPendingDelete(null)
+        }}
+        onConfirm={handleDeleteConfirm}
+        worktreeName={pendingDelete?.name || ''}
+      />
     </div>
   )
 }

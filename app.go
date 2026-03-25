@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"agent-orch/internal/config"
 	"agent-orch/internal/db"
@@ -34,6 +36,9 @@ func (a *App) startup(ctx context.Context) {
 	// 初始化配置和数据库
 	cfg, _ := config.Load()
 	if cfg != nil {
+		// 确保应用目录存在
+		cfg.EnsureAppDir()
+
 		if database, err := db.Init(cfg.DatabasePath()); err == nil {
 			a.db = database
 		}
@@ -44,6 +49,15 @@ func (a *App) startup(ctx context.Context) {
 
 	// 初始化 worktree 管理器（使用当前目录）
 	if mgr, err := worktree.NewManager("."); err == nil {
+		// 设置 Superset 风格的 worktree 基础目录
+		mgr.SetWorktreeBaseDir(func(projectName string) string {
+			if cfg != nil {
+				return cfg.ProjectWorktreeDir(projectName)
+			}
+			// fallback
+			home, _ := os.UserHomeDir()
+			return filepath.Join(home, ".agent-orch", "worktrees", projectName)
+		})
 		a.worktree = mgr
 	}
 }

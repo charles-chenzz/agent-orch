@@ -19,10 +19,31 @@ const tmuxListFormat = "#{session_name}\t#{session_attached}\t#{session_created}
 
 var execCommand = exec.Command
 
-// detectPreferredShell 检测用户的首选 shell
+// 缓存的 shell 信息
+var (
+	cachedShell      string
+	cachedIsEnhanced bool
+	shellCacheInit   bool
+)
+
+// detectPreferredShell 检测用户的首选 shell（带缓存）
 // 返回: shell 路径, 是否是增强型 shell（有 oh-my-zsh/starship 等配置）
 // 增强型 shell 通常会自动处理工作目录，无需额外 cd
 func detectPreferredShell() (string, bool) {
+	// 返回缓存结果
+	if shellCacheInit {
+		return cachedShell, cachedIsEnhanced
+	}
+
+	shell, isEnhanced := detectPreferredShellUncached()
+	cachedShell = shell
+	cachedIsEnhanced = isEnhanced
+	shellCacheInit = true
+	return shell, isEnhanced
+}
+
+// detectPreferredShellUncached 实际检测 shell（不带缓存）
+func detectPreferredShellUncached() (string, bool) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fallbackShell(), false

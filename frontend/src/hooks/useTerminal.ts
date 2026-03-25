@@ -50,6 +50,38 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalReturn {
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const [ready, setReady] = useState(false)
 
+  // Subscribe to output events FIRST (before terminal is ready)
+  // Buffer outputs until terminal is ready
+  const outputBufferRef = useRef<string[]>([])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const handleOutput = (event: TerminalEvent) => {
+      if (event.sessionId !== sessionId || !event.data) return
+
+      if (terminalRef.current) {
+        // Terminal ready, write directly
+        terminalRef.current.write(event.data)
+      } else {
+        // Buffer output until terminal is ready
+        outputBufferRef.current.push(event.data)
+      }
+    }
+
+    // Subscribe immediately
+    const unsubscribe = EventsOn(TERMINAL_EVENTS.OUTPUT, handleOutput)
+    unsubscribeRef.current = unsubscribe
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe()
+      }
+      unsubscribeRef.current = null
+      outputBufferRef.current = []
+    }
+  }, [sessionId])
+
   // Initialize terminal
   useEffect(() => {
     if (!containerRef.current || !sessionId) return
@@ -141,15 +173,19 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalReturn {
     // Store refs
     terminalRef.current = term
     fitAddonRef.current = fitAddon
+
+    // Flush buffered output to terminal
+    if (outputBufferRef.current.length > 0) {
+      for (const data of outputBufferRef.current) {
+        term.write(data)
+      }
+      outputBufferRef.current = []
+    }
+
     setReady(true)
 
     // Cleanup - dispose terminal only, don't call EventsOff (it affects all listeners)
     return () => {
-      // Unsubscribe using the returned function, not EventsOff
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current()
-        unsubscribeRef.current = null
-      }
       // Remove IME event listeners
       if (containerEl) {
         containerEl.removeEventListener('compositionstart', handleCompositionStart)
@@ -162,30 +198,6 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalReturn {
       setReady(false)
     }
   }, [sessionId, fontFamily, fontSize, theme.background, theme.foreground, theme.cursor, theme.selection])
-
-  // Subscribe to output events (F2.14)
-  // Use the returned unsubscribe function instead of EventsOff
-  useEffect(() => {
-    if (!ready || !terminalRef.current || !sessionId) return
-
-    const handleOutput = (event: TerminalEvent) => {
-      if (event.sessionId === sessionId && event.data && terminalRef.current) {
-        terminalRef.current.write(event.data)
-      }
-    }
-
-    // EventsOn returns an unsubscribe function - use it!
-    const unsubscribe = EventsOn(TERMINAL_EVENTS.OUTPUT, handleOutput)
-    unsubscribeRef.current = unsubscribe
-
-    return () => {
-      // Use the specific unsubscribe function, not EventsOff
-      if (unsubscribe) {
-        unsubscribe()
-      }
-      unsubscribeRef.current = null
-    }
-  }, [sessionId, ready])
 
   // Resize handler (F2.12)
   const handleResize = useCallback(() => {

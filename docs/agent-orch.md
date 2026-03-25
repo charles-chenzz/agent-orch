@@ -1103,3 +1103,186 @@ function MarkdownEditor({ file }: { file: string }) {
 - [gotreesitter](https://github.com/odvcencio/gotreesitter) - 纯 Go Tree-sitter，无 CGO
 - [CodeMirror 6](https://codemirror.net/) - 代码编辑器
 - [react-markdown](https://github.com/remarkjs/react-markdown) - Markdown 预览
+
+---
+
+## Worktree 目录管理方案
+
+### 方案对比
+
+| 方案 | 目录结构 | 优点 | 缺点 |
+|------|---------|------|------|
+| **A. 项目内** | `<project>/.wt/<name>/` | 简单，项目自包含 | 分散各处 |
+| **B. 集中管理** | `~/.agent-orch/worktrees/<project>/<name>/` | 统一管理，符合 Superset 模式 | 需要处理改名迁移 |
+| **C. XDG + 符号链接** | `~/.local/share/agent-orch/` + `~/.agent-orch →` | 标准化，迁移零成本 | 略复杂 |
+
+### 推荐：Superset 风格（方案 B）
+
+参考 Superset 的目录结构：
+
+```
+~/.agent-orch/
+├── config.json              # 应用配置
+├── data.db                  # SQLite 数据库
+├── projects.json            # 项目注册表
+└── worktrees/               # 所有项目的 worktrees
+    ├── agent-orch/          # 按项目名分组
+    │   ├── feature-auth/
+    │   └── fix-bug/
+    └── my-app/
+        └── feature-x/
+```
+
+**Superset 实际目录结构**（`~/.superset/`）：
+```
+~/.superset/
+├── app-state.json
+├── local.db
+├── worktrees/
+│   ├── arbor/
+│   │   └── os-version-investigat/
+│   ├── learn-claude-code/
+│   │   └── charles-chenzz/
+│   └── TradeVoyage/
+└── ...
+```
+
+### 应用改名迁移问题
+
+**问题场景**：如果 `~/.agent-orch` 改名为 `~/.new-name`
+
+**会影响的组件**：
+
+| 组件 | 影响 | 严重程度 |
+|------|------|---------|
+| Git worktree 元数据 | `.git/worktrees/*/gitdir` 指向旧路径 | 🔴 高 |
+| 数据库路径 | 存储的绝对路径失效 | 🟡 中 |
+| 用户习惯 | 需要知道新路径 | 🟢 低 |
+
+**核心发现**：Git 不关心 worktree 目录名，只关心 `.git/worktrees/` 里的元数据关联。
+
+### 迁移工具设计（方案 3）
+
+如果需要支持改名迁移，需要实现以下功能：
+
+#### CLI 接口
+
+```bash
+# 预览迁移（不执行）
+agent-orch migrate --from ~/.agent-orch --to ~/.new-name --dry-run
+
+# 执行迁移
+agent-orch migrate --from ~/.agent-orch --to ~/.new-name
+
+# 带备份
+agent-orch migrate --from ~/.agent-orch --to ~/.new-name --backup
+
+# 回滚上次迁移
+agent-orch migrate --rollback
+```
+
+#### 迁移流程
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Migration Workflow                    │
+├─────────────────────────────────────────────────────────┤
+│  1. Pre-flight Check                                    │
+│     ├── 验证旧路径存在                                    │
+│     ├── 验证新路径不存在                                  │
+│     ├── 检查磁盘空间                                      │
+│     └── 检查所有 worktree 是否 detached                   │
+│                                                         │
+│  2. Create Migration Plan                               │
+│     ├── 扫描所有 worktree                                │
+│     ├── 收集所有 Git 元数据文件                           │
+│     ├── 收集所有数据库记录                                │
+│     └── 生成迁移计划（dry-run 可预览）                     │
+│                                                         │
+│  3. Execute Migration                                   │
+│     ├── 备份当前状态                                      │
+│     ├── 移动目录                                         │
+│     ├── 更新 Git 元数据                                  │
+│     ├── 更新数据库                                       │
+│     └── 更新配置文件                                      │
+│                                                         │
+│  4. Verification                                        │
+│     ├── 验证所有 worktree 可访问                          │
+│     ├── 验证 Git 状态正常                                 │
+│     └── 验证应用可正常启动                                │
+│                                                         │
+│  5. Rollback (if failed)                                │
+│     └── 从备份恢复                                        │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### 需要更新的内容
+
+1. **Git Worktree 元数据**
+   ```bash
+   # .git/worktrees/<name>/gitdir 文件内容需要更新
+   # 旧：/Users/xxx/.agent-orch/worktrees/project/feature/.git
+   # 新：/Users/xxx/.new-name/worktrees/project/feature/.git
+   ```
+
+2. **数据库路径**
+   ```sql
+   UPDATE sessions SET cwd = REPLACE(cwd, ?, ?) WHERE cwd LIKE ?
+   ```
+
+3. **配置文件**
+   ```json
+   {
+       "worktreeBaseDir": "~/.new-name/worktrees"
+   }
+   ```
+
+#### 工作量预估
+
+| 模块 | 工作量 | 复杂度 |
+|------|--------|--------|
+| 路径扫描 | 2h | 低 |
+| Git 元数据更新 | 4h | 中 |
+| 数据库更新 | 2h | 低 |
+| 目录移动 | 1h | 低 |
+| CLI + 验证 | 3h | 中 |
+| 回滚机制 | 3h | 中 |
+| **总计** | **~15h** | |
+
+### 简化方案：XDG + 符号链接
+
+如果预期改名概率低，推荐使用简化方案：
+
+```
+# 实际存储位置（XDG 标准）
+~/.local/share/agent-orch/
+├── data.db
+└── worktrees/
+    └── ...
+
+# 符号链接（用户友好）
+~/.agent-orch → ~/.local/share/agent-orch/
+```
+
+**优点**：
+- 用户可以 `ls ~/.agent-orch`（直观）
+- 改名只需更新符号链接
+- Git worktree 路径通过符号链接永远有效
+- 符合 XDG 标准
+
+**改名操作**：
+```bash
+mv ~/.local/share/agent-orch ~/.local/share/new-name
+rm ~/.agent-orch
+ln -s ~/.local/share/new-name ~/.agent-orch
+```
+
+### 结论
+
+| 场景 | 推荐方案 |
+|------|---------|
+| 预期改名概率低 | XDG + 符号链接 |
+| 需要完整迁移支持 | Superset 风格 + 迁移工具 |
+| 简单场景 | 项目内 `.wt/` |
+
+**当前决策**：采用 Superset 风格，暂不实现迁移工具。改名概率低，后续需要时再添加。

@@ -12,10 +12,14 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
+// WorktreeBaseDirFunc is a function that returns the base directory for worktrees
+type WorktreeBaseDirFunc func(projectName string) string
+
 // Manager 管理 Git worktree 操作.
 type Manager struct {
-	repoPath string
-	repo     *git.Repository
+	repoPath           string
+	repo               *git.Repository
+	worktreeBaseDirFn  WorktreeBaseDirFunc // 可选：自定义 worktree 基础目录
 }
 
 // NewManager 创建新的 worktree manager.
@@ -41,6 +45,33 @@ func NewManager(repoPath string) (*Manager, error) {
 		repoPath: absPath,
 		repo:     repo,
 	}, nil
+}
+
+// SetWorktreeBaseDir sets a custom function to determine worktree base directory
+func (m *Manager) SetWorktreeBaseDir(fn WorktreeBaseDirFunc) {
+	m.worktreeBaseDirFn = fn
+}
+
+// getWorktreeTargetPath calculates the target path for a new worktree
+// Uses Superset-style: ~/.agent-orch/worktrees/<project>/<worktree>/
+func (m *Manager) getWorktreeTargetPath(worktreeName string) string {
+	// 如果有自定义函数，使用它
+	if m.worktreeBaseDirFn != nil {
+		projectName := filepath.Base(m.repoPath)
+		return filepath.Join(m.worktreeBaseDirFn(projectName), worktreeName)
+	}
+
+	// 默认：使用 Superset 风格目录
+	home, _ := os.UserHomeDir()
+	projectName := filepath.Base(m.repoPath)
+	return filepath.Join(home, ".agent-orch", "worktrees", projectName, worktreeName)
+}
+
+// ensureWorktreeDir ensures the worktree base directory exists
+func (m *Manager) ensureWorktreeDir(worktreeName string) error {
+	targetPath := m.getWorktreeTargetPath(worktreeName)
+	parentDir := filepath.Dir(targetPath)
+	return os.MkdirAll(parentDir, 0755)
 }
 
 // List 返回所有 worktrees.

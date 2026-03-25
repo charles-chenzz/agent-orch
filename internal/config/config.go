@@ -107,10 +107,41 @@ func (m *Manager) Save(cfg *Config) error {
 
 // DatabasePath returns the database file path.
 func (m *Manager) DatabasePath() string {
-	return filepath.Join(filepath.Dir(m.path), "data.db")
+	return filepath.Join(m.AppDir(), "data.db")
+}
+
+// AppDir returns the application directory (~/.agent-orch/)
+func (m *Manager) AppDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".agent-orch")
+}
+
+// WorktreeBaseDir returns the base directory for all worktrees
+// Structure: ~/.agent-orch/worktrees/<project-name>/<worktree-name>/
+func (m *Manager) WorktreeBaseDir() string {
+	return filepath.Join(m.AppDir(), "worktrees")
+}
+
+// ProjectWorktreeDir returns the worktree directory for a specific project
+func (m *Manager) ProjectWorktreeDir(projectName string) string {
+	return filepath.Join(m.WorktreeBaseDir(), projectName)
+}
+
+// EnsureAppDir ensures the application directory structure exists
+func (m *Manager) EnsureAppDir() error {
+	dirs := []string{
+		m.AppDir(),
+		m.WorktreeBaseDir(),
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func getConfigPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "agent-orch", "config.toml")
+	return filepath.Join(home, ".agent-orch", "config.toml")
 }

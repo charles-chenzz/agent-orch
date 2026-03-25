@@ -4,35 +4,64 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // validNamePattern 有效的 worktree 名称
 var validNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_-]*$`)
 
+// branchToName 将分支名转换为有效的目录名
+// feature/auth -> feature-auth, fix/bug-123 -> fix-bug-123
+func branchToName(branch string) string {
+	// 替换 / 为 -
+	name := strings.ReplaceAll(branch, "/", "-")
+	// 替换多个连续的 - 为单个
+	for strings.Contains(name, "--") {
+		name = strings.ReplaceAll(name, "--", "-")
+	}
+	// 移除首尾的 -
+	name = strings.Trim(name, "-")
+	// 如果为空或以数字开头前面加 wt- 前缀
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		name = "wt-" + name
+	}
+	return name
+}
+
 // Create 创建新的 worktree
 func (m *Manager) Create(opts CreateOptions) (*Worktree, error) {
-	// 1. 参数验证
+	// 1. 如果 Name 为空，自动从 Branch 生成
+	if opts.Name == "" {
+		opts.Name = branchToName(opts.Branch)
+	}
+
+	// 2. 参数验证
 	if err := m.validateCreateOptions(opts); err != nil {
 		return nil, err
 	}
 
-	// 2. 检查名称冲突
+	// 3. 检查名称冲突
 	if err := m.checkNameConflict(opts.Name); err != nil {
 		return nil, err
 	}
 
-	// 3. 计算目标路径
-	targetPath := filepath.Join(filepath.Dir(m.repoPath), opts.Name)
+	// 4. 计算目标路径（使用 Superset 风格）
+	targetPath := m.getWorktreeTargetPath(opts.Name)
 
-	// 4. 检查路径是否已存在
+	// 5. 确保目标目录存在
+	if err := m.ensureWorktreeDir(opts.Name); err != nil {
+		return nil, NewWorktreeError(ErrCreateFailed,
+			fmt.Sprintf("failed to create worktree directory: %s", err))
+	}
+
+	// 6. 检查路径是否已存在
 	if _, err := os.Stat(targetPath); err == nil {
 		return nil, NewWorktreeError(ErrPathExists,
 			fmt.Sprintf("path already exists: %s", targetPath))
 	}
 
-	// 5. 检查分支
+	// 7. 检查分支
 	if opts.CreateNew {
 		if err := m.checkBranchExists(opts.BaseBranch); err != nil {
 			return nil, err
@@ -43,12 +72,12 @@ func (m *Manager) Create(opts CreateOptions) (*Worktree, error) {
 		}
 	}
 
-	// 6. 执行 git worktree add
+	// 8. 执行 git worktree add
 	if err := m.execWorktreeAdd(targetPath, opts); err != nil {
 		return nil, err
 	}
 
-	// 7. 验证创建成功
+	// 9. 验证创建成功
 	worktrees, err := m.List()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list worktrees after creation: %w", err)
