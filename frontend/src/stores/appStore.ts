@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { AppState, Project, DiffFile } from '../types'
+import { ListWorktrees } from '../../wailsjs/go/main/App'
 
 // Mock data for development
 const mockProjects: Project[] = [
@@ -64,6 +65,7 @@ const mockDiffFiles: DiffFile[] = [
 ]
 
 interface AppActions {
+  loadWorktrees: () => Promise<void>
   selectWorktree: (id: string) => void
   toggleProjectExpand: (id: string) => void
   toggleTopPanel: () => void
@@ -86,6 +88,50 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
   activeTerminalTabId: 'tab-1',
 
   // Actions
+  loadWorktrees: async () => {
+    try {
+      const worktrees = await ListWorktrees()
+      const realWorktrees = (worktrees || []).map(wt => ({
+        id: wt.id,
+        name: wt.name,
+        branch: wt.branch,
+        path: wt.path,
+        hasChanges: wt.hasChanges,
+        terminalTabs: [],
+      }))
+
+      set((state) => {
+        const mainWorktreePath = worktrees?.find(wt => wt.isMain)?.path
+        const fallbackPath = worktrees?.[0]?.path
+        const currentProject = state.projects.find(p => p.id === 'agent-orch')
+        const nextProjectPath = mainWorktreePath || fallbackPath || currentProject?.path || ''
+
+        const hasTargetProject = state.projects.some(p => p.id === 'agent-orch')
+        const projects = hasTargetProject
+          ? state.projects.map(p => p.id === 'agent-orch'
+            ? { ...p, path: nextProjectPath, worktrees: realWorktrees }
+            : p)
+          : [{
+            id: 'agent-orch',
+            name: 'agent-orch',
+            path: nextProjectPath,
+            worktrees: realWorktrees,
+          }, ...state.projects]
+
+        const selectedStillExists = state.selectedWorktreeId != null
+          && realWorktrees.some(wt => wt.id === state.selectedWorktreeId)
+
+        return {
+          projects,
+          selectedWorktreeId: selectedStillExists ? state.selectedWorktreeId : (realWorktrees[0]?.id ?? null),
+          activeTerminalTabId: null,
+        }
+      })
+    } catch {
+      // Keep mock data when runtime is unavailable.
+    }
+  },
+
   selectWorktree: (id) => {
     const state = get()
     const worktree = state.projects
