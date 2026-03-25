@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AppState, Project, DiffFile } from '../types'
-import { ListWorktrees } from '../../wailsjs/go/main/App'
+import { CreateWorktree, DeleteWorktree, ListWorktrees } from '../../wailsjs/go/main/App'
+import { useTerminalStore } from './terminalStore'
 
 // Mock data for development
 const mockProjects: Project[] = [
@@ -66,6 +67,13 @@ const mockDiffFiles: DiffFile[] = [
 
 interface AppActions {
   loadWorktrees: () => Promise<void>
+  createWorktree: (opts: {
+    name: string
+    branch: string
+    baseBranch: string
+    createNew: boolean
+  }) => Promise<void>
+  deleteWorktree: (worktreeId: string, force: boolean) => Promise<void>
   selectWorktree: (id: string) => void
   toggleProjectExpand: (id: string) => void
   toggleTopPanel: () => void
@@ -130,6 +138,28 @@ export const useAppStore = create<AppState & AppActions>((set, get) => ({
     } catch {
       // Keep mock data when runtime is unavailable.
     }
+  },
+
+  createWorktree: async (opts) => {
+    const created = await CreateWorktree(opts)
+    await get().loadWorktrees()
+    if (created?.id) {
+      get().selectWorktree(created.id)
+    }
+  },
+
+  deleteWorktree: async (worktreeId, force) => {
+    const worktree = get().projects
+      .flatMap((p) => p.worktrees)
+      .find((w) => w.id === worktreeId)
+
+    if (!worktree) {
+      throw new Error(`worktree not found: ${worktreeId}`)
+    }
+
+    await useTerminalStore.getState().destroySessionsByWorktree(worktree.id)
+    await DeleteWorktree(worktree.name, force)
+    await get().loadWorktrees()
   },
 
   selectWorktree: (id) => {

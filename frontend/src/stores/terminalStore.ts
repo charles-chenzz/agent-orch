@@ -24,6 +24,7 @@ interface TerminalState {
   createOrAttachSession: (id: string, worktreeId: string) => Promise<void>
   detachSession: (id: string) => Promise<void>
   destroySession: (id: string) => Promise<void>
+  destroySessionsByWorktree: (worktreeId: string) => Promise<void>
   setActiveSession: (id: string | null) => void
   updateSessionState: (id: string, state: SessionState) => void
 
@@ -96,6 +97,33 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
     } catch (err) {
       set({ error: String(err) })
+    }
+  },
+
+  destroySessionsByWorktree: async (worktreeId: string) => {
+    const sessionIds = get().sessions
+      .filter((s) => s.worktreeId === worktreeId)
+      .map((s) => s.id)
+
+    if (sessionIds.length === 0) {
+      return
+    }
+
+    try {
+      for (const sessionId of sessionIds) {
+        await DestroyTerminal(sessionId)
+      }
+      await get().fetchSessions()
+
+      if (sessionIds.includes(get().activeSessionId || '')) {
+        const remaining = get().sessions.filter((s) => !sessionIds.includes(s.id))
+        set({
+          activeSessionId: remaining.length > 0 ? remaining[0].id : null,
+        })
+      }
+    } catch (err) {
+      set({ error: String(err) })
+      throw err
     }
   },
 

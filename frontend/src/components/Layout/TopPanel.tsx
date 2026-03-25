@@ -87,7 +87,91 @@ function DiffCountBadge() {
 }
 
 function ProjectListCompact() {
-  const { projects, selectedWorktreeId, expandedProjectIds, selectWorktree, toggleProjectExpand } = useAppStore()
+  const {
+    projects,
+    selectedWorktreeId,
+    expandedProjectIds,
+    selectWorktree,
+    toggleProjectExpand,
+    createWorktree,
+    deleteWorktree,
+  } = useAppStore()
+
+  const handleCreateWorktree = async (projectId: string) => {
+    if (projectId !== 'agent-orch') {
+      window.alert('Only the active runtime project supports creating worktrees.')
+      return
+    }
+
+    const name = window.prompt('New worktree name (folder name):', '')
+    if (!name) return
+
+    const trimmedName = name.trim()
+    if (!trimmedName) return
+
+    const branch = window.prompt('Branch name:', trimmedName)?.trim() || trimmedName
+    const baseBranch = window.prompt('Base branch:', 'main')?.trim() || 'main'
+
+    try {
+      await createWorktree({
+        name: trimmedName,
+        branch,
+        baseBranch,
+        createNew: true,
+      })
+    } catch (err) {
+      window.alert(`Failed to create worktree: ${String(err)}`)
+    }
+  }
+
+  const handleDeleteWorktree = async (
+    e: React.MouseEvent<HTMLButtonElement>,
+    projectId: string,
+    worktreeId: string,
+    worktreeName: string
+  ) => {
+    e.stopPropagation()
+
+    if (projectId !== 'agent-orch') {
+      window.alert('Only the active runtime project supports deleting worktrees.')
+      return
+    }
+
+    if (worktreeId === 'main' || worktreeName === 'main') {
+      window.alert('Main worktree cannot be deleted.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete worktree "${worktreeName}"?\n\nRelated terminal sessions will be destroyed first.`
+    )
+    if (!confirmed) return
+
+    try {
+      await deleteWorktree(worktreeId, false)
+    } catch (err) {
+      const msg = String(err)
+      const canForceDelete = msg.includes('ERR_HAS_CHANGES')
+        || msg.includes('ERR_HAS_UNPUSHED')
+        || msg.includes('force=true')
+
+      if (!canForceDelete) {
+        window.alert(`Failed to delete worktree: ${msg}`)
+        return
+      }
+
+      const forceDelete = window.confirm(
+        'This worktree has uncommitted changes or unpushed commits.\n\nForce delete anyway?'
+      )
+      if (!forceDelete) return
+
+      try {
+        await deleteWorktree(worktreeId, true)
+      } catch (forceErr) {
+        window.alert(`Force delete failed: ${String(forceErr)}`)
+      }
+    }
+  }
 
   return (
     <div className="py-1">
@@ -124,6 +208,7 @@ function ProjectListCompact() {
               <div className="ml-4 border-l border-border pl-1">
                 {project.worktrees.map((wt) => {
                   const isSelected = wt.id === selectedWorktreeId
+                  const canDelete = project.id === 'agent-orch' && wt.id !== 'main' && wt.name !== 'main'
                   return (
                     <div
                       key={wt.id}
@@ -145,14 +230,36 @@ function ProjectListCompact() {
                         )}
                       </span>
                       <span className="truncate">{wt.name}</span>
-                      {wt.terminalTabs.length > 0 && (
-                        <span className="ml-auto text-[10px] text-text-muted">
-                          {wt.terminalTabs.length} tab{wt.terminalTabs.length > 1 ? 's' : ''}
-                        </span>
-                      )}
+                      <div className="ml-auto flex items-center gap-1">
+                        {wt.terminalTabs.length > 0 && (
+                          <span className="text-[10px] text-text-muted">
+                            {wt.terminalTabs.length} tab{wt.terminalTabs.length > 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {canDelete && (
+                          <button
+                            className="w-4 h-4 flex items-center justify-center rounded text-text-muted hover:text-error hover:bg-error/10 transition-colors"
+                            title={`Delete worktree ${wt.name}`}
+                            onClick={(e) => handleDeleteWorktree(e, project.id, wt.id, wt.name)}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
+                <button
+                  className={`w-full mt-1 px-2 py-1 text-left text-xs rounded transition-colors ${
+                    project.id === 'agent-orch'
+                      ? 'text-accent hover:bg-accent/10'
+                      : 'text-text-muted/60 cursor-not-allowed'
+                  }`}
+                  onClick={() => handleCreateWorktree(project.id)}
+                  title={project.id === 'agent-orch' ? 'Create worktree' : 'Mock project only'}
+                >
+                  + New Worktree
+                </button>
               </div>
             </div>
           </div>

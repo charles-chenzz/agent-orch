@@ -1447,3 +1447,24 @@ type GitoxideBackend struct {
 | 文档和发布 | 0.5 天 |
 | Buffer | 1 天 |
 | **总计** | **10 天 (2 周)** |
+
+---
+
+## 10. Worktree + Terminal 行为约定（2026-03）
+
+为保证 Agent 总是在目标 worktree 下运行，前端交互遵循以下约定：
+
+1. **New Worktree**
+   - 点击 `New` 后创建 worktree。
+   - 创建成功后自动切换到新 worktree（更新 `selectedWorktreeId`）。
+   - 终端面板自动附加/创建该 worktree 的 terminal，会话 `cwd` 取该 worktree 路径。
+   - 在该 worktree 下点击 terminal `+` 新建 tab，仍使用该 worktree 的 `cwd`。
+
+2. **Delete Worktree**
+   - 删除前先销毁该 worktree 关联的 terminal sessions（`DestroyTerminal`）。
+   - 随后执行 `DeleteWorktree`。
+   - 删除成功后刷新 worktree 列表并回退到可用 worktree（如 `main` 或列表首个）。
+
+3. **Terminal Tab 的 `x` 行为**
+   - `x` 只关闭当前 terminal session（detach/destroy 取决于具体实现）。
+   - `x` **不会**删除 worktree。
