@@ -836,3 +836,154 @@ func BenchmarkFindSymbols(b *testing.B) {
 | 优化和 Bug 修复 | 2 天 |
 | 文档和发布 | 1 天 |
 | **总计** | **16 天 (3-4 周)** |
+
+---
+
+## 9. 与 Workspace / Worktree 融合设计（补充）
+
+> 本节用于对齐 Phase 1 已落地的 Worktree 交互（New/Delete + Terminal 协同）与 Phase 6 编辑器能力，避免出现“能管理 Worktree 但无法统一打开项目和浏览文件”的割裂体验。
+
+### 9.1 目标用户流
+
+1. 应用启动：
+   - 若没有已打开目录：显示 Landing（`Open Project`）
+   - 若存在已打开目录：直接进入主界面
+2. 打开目录后自动检测：
+   - Git Repo：进入 `git` 模式，加载 worktrees，默认选 `main/master` 对应主 worktree
+   - 非 Git 目录：进入 `plain` 模式，不显示 Worktree CRUD
+3. 多项目并存：
+   - 支持同时打开多个项目并切换 active project
+   - 文件树、编辑器、终端均跟随 active project 上下文
+
+### 9.2 前端状态模型（建议）
+
+```ts
+type ProjectMode = 'git' | 'plain'
+
+interface ProjectContext {
+  id: string
+  name: string
+  path: string
+  mode: ProjectMode
+  worktrees: Worktree[]          // plain 模式可为空或仅 root 映射
+  activeWorktreeId: string | null
+  openedFiles: string[]          // Phase 6 编辑 Tab
+  activeFile: string | null
+  expandedDirs: string[]         // 文件树展开状态
+}
+```
+
+Store 关键状态：
+- `projects: ProjectContext[]`
+- `activeProjectId: string | null`
+- `showExplorer: boolean`
+- `showOpenProjectLanding: boolean`
+
+### 9.3 前后端 API 对齐建议
+
+#### 项目层（新增）
+- `OpenProjectDialog() (string, error)`：系统目录选择
+- `OpenProject(path string) (*ProjectInfo, error)`：打开并检测 Git 属性
+- `ListOpenProjects() ([]ProjectInfo, error)`：启动恢复与多项目切换
+- `CloseProject(projectId string) error`
+- `SetActiveProject(projectId string) error`
+
+#### Worktree 层（改为 project-aware）
+- `ListWorktrees(projectId string)`
+- `CreateWorktree(projectId string, opts CreateOptions)`
+- `DeleteWorktree(projectId string, name string, force bool)`
+
+#### Editor 层（Phase 6）
+- `ListFiles(projectId string, basePath string)` 或 `ListFiles(projectId string, relativePath string)`
+- `ReadFile(projectId string, filePath string)`
+- `WriteFile(projectId string, filePath string, content string)`
+
+> 安全建议：尽量使用 `projectId + 相对路径`，避免前端直接传任意绝对路径导致越界访问风险。
+
+### 9.4 文件树 / 侧边栏交互规范
+
+1. Explorer 默认折叠，可通过按钮或快捷键（如 `Cmd/Ctrl+B`）展开
+2. 文件树根路径规则：
+   - Git 模式：根路径 = active worktree path
+   - Plain 模式：根路径 = project root path
+3. 点击文件：
+   - 在编辑区打开（复用已有 tab 则聚焦）
+   - Markdown 文件默认支持预览切换（Edit/Preview/Split）
+4. 切换项目时：
+   - Explorer 内容与打开文件上下文切换到目标项目
+   - 不自动关闭其他项目的已打开文件列表（按项目隔离保存）
+
+### 9.5 Worktree 与 Terminal 协同约束（沿用）
+
+1. New Worktree 成功后自动切换到该 worktree，terminal cwd 必须跟随
+2. Delete Worktree 前必须先销毁该 worktree 关联 terminal sessions
+3. terminal tab 的 `x` 仅关闭 session，不删除 worktree
+
+---
+
+## 10. 分阶段实施与阶段验收
+
+### Stage A：Workspace 入口与项目管理（P0）
+
+**范围**
+- Landing + `Open Project` 按钮
+- 打开目录并检测 Git/Non-Git
+- 多项目列表与 active project 切换
+- 已打开项目持久化与启动恢复
+
+**阶段验收**
+- [ ] 首次启动无项目时显示 Landing
+- [ ] 选择 Git 目录后进入主界面并可看到 worktree 数据
+- [ ] 选择非 Git 目录后进入主界面（plain 模式）
+- [ ] 重启应用后可恢复上次打开项目列表和 active project
+
+### Stage B：Explorer 文件树（P0）
+
+**范围**
+- 侧边栏 Explorer 组件接入
+- 按项目/工作树上下文加载目录树
+- 支持目录展开、文件选择、基础图标与高亮
+
+**阶段验收**
+- [ ] Git 模式文件树根为 active worktree path
+- [ ] Plain 模式文件树根为 project root path
+- [ ] 切换项目后文件树正确切换
+- [ ] 目录展开状态在同一项目内可保持
+
+### Stage C：基础编辑器（P0）
+
+**范围**
+- CodeMirror 接入
+- 打开/保存文件（Ctrl/Cmd+S）
+- 基础语法高亮（Go/TS/JS/Python/Rust/Markdown）
+
+**阶段验收**
+- [ ] 双击文件可打开编辑
+- [ ] 保存成功且内容落盘
+- [ ] 常见语言语法高亮正确
+- [ ] 打开 1MB 文件性能满足目标（<100ms 级别）
+
+### Stage D：Markdown 与导航增强（P1-P2）
+
+**范围**
+- Markdown Preview/Split
+- 正则符号导航（Layer 1）
+- 后台索引预留（Layer 2）
+
+**阶段验收**
+- [ ] Markdown 预览与编辑同步正常
+- [ ] 符号列表/跳转可用，响应时间符合目标
+- [ ] 切换文件与项目不出现状态串扰
+
+### Stage E：稳定性与发布（P0）
+
+**范围**
+- 全链路回归测试（Workspace + Worktree + Terminal + Explorer + Editor）
+- 错误处理与提示文案完善
+- 发布文档与 checklist 更新
+
+**阶段验收**
+- [ ] New/Delete Worktree 与 terminal 协同契约无回归
+- [ ] Git/Non-Git 两种模式功能均可用
+- [ ] 多项目切换稳定，无崩溃/卡死/路径串用
+- [ ] 发布检查清单全部通过
